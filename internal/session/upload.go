@@ -7,11 +7,14 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
+
+	"github.com/schollz/progressbar/v3"
 )
 
 const defaultUploadChunkSize = 256
 
-func uploadRawFile(ctx context.Context, path string, serial io.Writer) (int64, error) {
+func uploadRawFile(ctx context.Context, path string, serial io.Writer, progress io.Writer) (int64, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return 0, err
@@ -26,10 +29,15 @@ func uploadRawFile(ctx context.Context, path string, serial io.Writer) (int64, e
 	}
 	defer file.Close()
 
-	return copyRaw(ctx, file, serial, defaultUploadChunkSize)
+	return copyRaw(ctx, file, serial, defaultUploadChunkSize, newUploadProgress(info.Size(), progress))
 }
 
-func copyRaw(ctx context.Context, src io.Reader, dst io.Writer, chunkSize int) (int64, error) {
+type rawProgress interface {
+	Add64(num int64) error
+	Finish() error
+}
+
+func copyRaw(ctx context.Context, src io.Reader, dst io.Writer, chunkSize int, progress rawProgress) (int64, error) {
 	if chunkSize <= 0 {
 		return 0, errors.New("chunk size must be positive")
 	}
@@ -48,10 +56,20 @@ func copyRaw(ctx context.Context, src io.Reader, dst io.Writer, chunkSize int) (
 			if writeErr := writeFull(dst, buf[:n]); writeErr != nil {
 				return written, writeErr
 			}
+			if progress != nil {
+				if progressErr := progress.Add64(int64(n)); progressErr != nil {
+					return written, progressErr
+				}
+			}
 			written += int64(n)
 		}
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
+				if progress != nil {
+					if progressErr := progress.Finish(); progressErr != nil {
+						return written, progressErr
+					}
+				}
 				return written, nil
 			}
 			return written, readErr
@@ -73,6 +91,26 @@ func writeFull(dst io.Writer, buf []byte) error {
 		}
 	}
 	return nil
+}
+
+func newUploadProgress(size int64, output io.Writer) rawProgress {
+	if output == nil {
+		return nil
+	}
+
+	return progressbar.NewOptions64(
+		size,
+		progressbar.OptionSetWriter(output),
+		progressbar.OptionSetDescription("[xserial] upload"),
+		progressbar.OptionSetWidth(24),
+		progressbar.OptionShowBytes(true),
+		progressbar.OptionShowTotalBytes(true),
+		progressbar.OptionThrottle(100*time.Millisecond),
+		progressbar.OptionSetRenderBlankState(true),
+		progressbar.OptionOnCompletion(func() {
+			fmt.Fprint(output, "\r\n")
+		}),
+	)
 }
 
 func (s *Session) readUploadPath(ctx context.Context) (string, error) {

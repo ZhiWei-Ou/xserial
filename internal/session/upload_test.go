@@ -18,7 +18,8 @@ func TestUploadRawFileSendsFileContent(t *testing.T) {
 	}
 
 	var serial bytes.Buffer
-	n, err := uploadRawFile(context.Background(), path, &serial)
+	var stderr bytes.Buffer
+	n, err := uploadRawFile(context.Background(), path, &serial, &stderr)
 	if err != nil {
 		t.Fatalf("uploadRawFile() error = %v", err)
 	}
@@ -28,12 +29,15 @@ func TestUploadRawFileSendsFileContent(t *testing.T) {
 	if got := serial.String(); got != "raw file content" {
 		t.Fatalf("serial output = %q, want %q", got, "raw file content")
 	}
+	if got := stderr.String(); !strings.Contains(got, "[xserial] upload") {
+		t.Fatalf("stderr = %q, want upload progress", got)
+	}
 }
 
 func TestUploadRawFileRejectsDirectory(t *testing.T) {
 	var serial bytes.Buffer
 
-	_, err := uploadRawFile(context.Background(), t.TempDir(), &serial)
+	_, err := uploadRawFile(context.Background(), t.TempDir(), &serial, io.Discard)
 	if err == nil {
 		t.Fatalf("uploadRawFile() error = nil, want error")
 	}
@@ -77,7 +81,7 @@ func TestSessionUploadsFileWithoutWritingPathToSerial(t *testing.T) {
 }
 
 func TestCopyRawRejectsInvalidChunkSize(t *testing.T) {
-	_, err := copyRaw(context.Background(), strings.NewReader("x"), io.Discard, 0)
+	_, err := copyRaw(context.Background(), strings.NewReader("x"), io.Discard, 0, nil)
 	if err == nil {
 		t.Fatalf("copyRaw() error = nil, want error")
 	}
@@ -89,7 +93,8 @@ func TestCopyRawRejectsInvalidChunkSize(t *testing.T) {
 func TestCopyRawHandlesShortWrites(t *testing.T) {
 	writer := &shortWriter{}
 
-	n, err := copyRaw(context.Background(), strings.NewReader("abcdef"), writer, 4)
+	progress := &fakeProgress{}
+	n, err := copyRaw(context.Background(), strings.NewReader("abcdef"), writer, 4, progress)
 	if err != nil {
 		t.Fatalf("copyRaw() error = %v", err)
 	}
@@ -98,6 +103,12 @@ func TestCopyRawHandlesShortWrites(t *testing.T) {
 	}
 	if got := writer.String(); got != "abcdef" {
 		t.Fatalf("writer output = %q, want abcdef", got)
+	}
+	if progress.bytes != 6 {
+		t.Fatalf("progress bytes = %d, want 6", progress.bytes)
+	}
+	if !progress.finished {
+		t.Fatalf("progress finished = false, want true")
 	}
 }
 
@@ -110,4 +121,19 @@ func (w *shortWriter) Write(buf []byte) (int, error) {
 		buf = buf[:2]
 	}
 	return w.Buffer.Write(buf)
+}
+
+type fakeProgress struct {
+	bytes    int64
+	finished bool
+}
+
+func (p *fakeProgress) Add64(num int64) error {
+	p.bytes += num
+	return nil
+}
+
+func (p *fakeProgress) Finish() error {
+	p.finished = true
+	return nil
 }

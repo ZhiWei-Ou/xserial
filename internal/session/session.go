@@ -221,7 +221,7 @@ func (s *Session) uploadFile(ctx context.Context) {
 		return
 	}
 
-	n, err := uploadRawFile(ctx, path, s.port)
+	n, err := uploadRawFile(ctx, path, s.port, s.stderr)
 	if err != nil {
 		printLocalLine(s.stderr, fmt.Sprintf("[xserial] upload failed: %v", err))
 		return
