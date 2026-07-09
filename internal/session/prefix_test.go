@@ -31,6 +31,7 @@ func TestPrefixMachineRecognizesHelpAndQuit(t *testing.T) {
 		want PrefixAction
 	}{
 		{name: "help", key: 'h', want: ActionHelp},
+		{name: "upload", key: 'u', want: ActionUpload},
 		{name: "quit", key: 'q', want: ActionQuit},
 	}
 

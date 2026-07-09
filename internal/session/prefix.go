@@ -9,6 +9,7 @@ type PrefixAction int
 const (
 	ActionNone PrefixAction = iota
 	ActionHelp
+	ActionUpload
 	ActionQuit
 	ActionWroteLiteralPrefix
 )
@@ -39,6 +40,8 @@ func (m *PrefixMachine) HandleByte(b byte, serial io.Writer) (PrefixAction, erro
 		return ActionWroteLiteralPrefix, err
 	case 'h', 'H', '?':
 		return ActionHelp, nil
+	case 'u', 'U':
+		return ActionUpload, nil
 	case 'q', 'Q':
 		return ActionQuit, nil
 	default:

@@ -150,6 +150,7 @@ func TestPrintHelpUsesCRLFInRawMode(t *testing.T) {
 	want := "\r\n" +
 		"[xserial] local commands:\r\n" +
 		"  Ctrl-A h       show this help\r\n" +
+		"  Ctrl-A u       upload raw file\r\n" +
 		"  Ctrl-A q       quit\r\n" +
 		"  Ctrl-A Ctrl-A  send Ctrl-A\r\n"
 	if got := stderr.String(); got != want {

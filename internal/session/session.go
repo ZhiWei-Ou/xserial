@@ -186,6 +186,8 @@ func (s *Session) copyStdinToSerial(ctx context.Context, cancel context.CancelFu
 			switch action {
 			case ActionHelp:
 				printHelp(s.stderr)
+			case ActionUpload:
+				s.uploadFile(ctx)
 			case ActionQuit:
 				printLocalLine(s.stderr, "")
 				printLocalLine(s.stderr, "[xserial] closing")
@@ -203,8 +205,33 @@ func printHelp(w io.Writer) {
 	printLocalLine(w, "")
 	printLocalLine(w, "[xserial] local commands:")
 	printLocalLine(w, "  Ctrl-A h       show this help")
+	printLocalLine(w, "  Ctrl-A u       upload raw file")
 	printLocalLine(w, "  Ctrl-A q       quit")
 	printLocalLine(w, "  Ctrl-A Ctrl-A  send Ctrl-A")
+}
+
+func (s *Session) uploadFile(ctx context.Context) {
+	path, err := s.readUploadPath(ctx)
+	if err != nil {
+		printLocalLine(s.stderr, fmt.Sprintf("[xserial] upload canceled: %v", err))
+		return
+	}
+	if path == "" {
+		printLocalLine(s.stderr, "[xserial] upload canceled")
+		return
+	}
+
+	n, err := uploadRawFile(ctx, path, s.port)
+	if err != nil {
+		printLocalLine(s.stderr, fmt.Sprintf("[xserial] upload failed: %v", err))
+		return
+	}
+
+	printLocalLine(s.stderr, fmt.Sprintf("[xserial] uploaded %d bytes", n))
+}
+
+func printLocal(w io.Writer, text string) {
+	fmt.Fprint(w, text)
 }
 
 func printLocalLine(w io.Writer, line string) {
