@@ -27,6 +27,16 @@ func TestVersionFallsBackForDevelopmentBuild(t *testing.T) {
 	}
 }
 
+func TestVersionUsesReleaseBuildValue(t *testing.T) {
+	previous := buildVersion
+	buildVersion = "v1.2.3"
+	t.Cleanup(func() { buildVersion = previous })
+
+	if got := currentVersion(); got != "v1.2.3" {
+		t.Fatalf("currentVersion() = %q, want v1.2.3", got)
+	}
+}
+
 func TestRootCommandDisplaysVersion(t *testing.T) {
 	cmd := NewRootCommand()
 	var output bytes.Buffer

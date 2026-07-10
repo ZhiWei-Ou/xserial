@@ -10,6 +10,8 @@ import (
 
 const fallbackVersion = "v0.0.1"
 
+var buildVersion string
+
 const asciiPrefix = `
  __  __ ____               _         _
  \ \/ // ___|   ___  _ __ (_)  __ _ | |
@@ -46,6 +48,9 @@ func ExecuteContext(ctx context.Context) error {
 }
 
 func currentVersion() string {
+	if buildVersion != "" {
+		return buildVersion
+	}
 	return versionFromBuildInfo(debug.ReadBuildInfo())
 }
 
