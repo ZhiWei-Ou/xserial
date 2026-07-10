@@ -3,6 +3,7 @@ package rawui
 import (
 	"bytes"
 	"context"
+	"os"
 	"sync"
 	"testing"
 
@@ -66,12 +67,18 @@ func TestRawFrontendUsesCtrlPAndRestoresTerminal(t *testing.T) {
 func TestRawFrontendWritesReceivedBytesTransparently(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	endpoint := &fakeEndpoint{events: make(chan session.Event, 1), cancel: cancel}
+	input, inputWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer inputWriter.Close()
 	want := []byte{'a', 0, 'b', '\n'}
 	endpoint.events <- session.Received{Data: want}
 	close(endpoint.events)
 	terminal := &fakeTerminal{}
 	var output bytes.Buffer
-	frontend := New(Config{Terminal: terminal, Input: bytes.NewReader(nil), Output: &output, Local: &bytes.Buffer{}})
+	frontend := New(Config{Terminal: terminal, Input: input, Output: &output, Local: &bytes.Buffer{}})
 
 	if err := frontend.Run(ctx, endpoint); err != nil {
 		t.Fatalf("Run() error = %v", err)
