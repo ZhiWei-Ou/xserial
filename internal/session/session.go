@@ -5,21 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"os/signal"
 	"sync"
-	"syscall"
+	"time"
 
-	"golang.org/x/term"
+	"github.com/ZhiWei-Ou/xserial/internal/transfer"
 )
+
+var ErrTransferActive = errors.New("transfer is active")
 
 type SerialPort interface {
 	io.ReadWriteCloser
-}
-
-type Terminal interface {
-	MakeRaw() error
-	Restore() error
 }
 
 type Logger interface {
@@ -27,240 +22,340 @@ type Logger interface {
 	Warn(event string, keyValues ...any)
 }
 
-type OSTerminal struct {
-	file     *os.File
-	oldState *term.State
+type Event interface {
+	isSessionEvent()
 }
 
-func NewOSTerminal(file *os.File) *OSTerminal {
-	return &OSTerminal{file: file}
+type Received struct {
+	Data []byte
+	At   time.Time
 }
 
-func (t *OSTerminal) MakeRaw() error {
-	oldState, err := term.MakeRaw(int(t.file.Fd()))
-	if err != nil {
-		return err
-	}
-	t.oldState = oldState
-	return nil
+func (Received) isSessionEvent() {}
+
+type UploadStarted struct {
+	Path string
 }
 
-func (t *OSTerminal) Restore() error {
-	if t.oldState == nil {
-		return nil
-	}
-	return term.Restore(int(t.file.Fd()), t.oldState)
+func (UploadStarted) isSessionEvent() {}
+
+type UploadProgress struct {
+	Path           string
+	Written, Total int64
+}
+
+func (UploadProgress) isSessionEvent() {}
+
+type UploadFinished struct {
+	Path  string
+	Bytes int64
+	Err   error
+}
+
+func (UploadFinished) isSessionEvent() {}
+
+type Endpoint interface {
+	Events() <-chan Event
+	Send(context.Context, []byte) error
+	StartUpload(context.Context, string) error
+	CancelUpload()
+	Quit()
+}
+
+type Frontend interface {
+	Run(context.Context, Endpoint) error
 }
 
 type Config struct {
 	Port              SerialPort
-	Terminal          Terminal
-	Stdin             io.Reader
-	Stdout            io.Writer
-	Stderr            io.Writer
+	Frontend          Frontend
 	ReceiveLog        io.Writer
 	ReceiveTimeFormat string
-	PrefixKey         byte
 	Logger            Logger
 }
 
 type Session struct {
-	port       SerialPort
-	terminal   Terminal
-	stdin      io.Reader
-	stdout     io.Writer
-	stderr     io.Writer
-	receiveLog io.Writer
-	timeFormat string
-	prefixKey  byte
-	logger     Logger
+	cfg Config
 }
 
-func New(cfg Config) *Session {
-	prefixKey := cfg.PrefixKey
-	if prefixKey == 0 {
-		prefixKey = DefaultPrefixKey
-	}
+func New(cfg Config) *Session { return &Session{cfg: cfg} }
 
-	return &Session{
-		port:       cfg.Port,
-		terminal:   cfg.Terminal,
-		stdin:      cfg.Stdin,
-		stdout:     cfg.Stdout,
-		stderr:     cfg.Stderr,
-		receiveLog: cfg.ReceiveLog,
-		timeFormat: cfg.ReceiveTimeFormat,
-		prefixKey:  prefixKey,
-		logger:     cfg.Logger,
+type writeRequest struct {
+	data []byte
+	done chan error
+}
+
+type endpoint struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	events chan Event
+	writes chan writeRequest
+	logger Logger
+
+	mu           sync.Mutex
+	stopping     bool
+	uploading    bool
+	uploadCancel context.CancelFunc
+	workers      sync.WaitGroup
+}
+
+func (e *endpoint) Events() <-chan Event { return e.events }
+
+func (e *endpoint) Send(ctx context.Context, data []byte) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.stopping {
+		return context.Canceled
+	}
+	if e.uploading {
+		return ErrTransferActive
+	}
+	return e.write(ctx, data)
+}
+
+func (e *endpoint) write(ctx context.Context, data []byte) error {
+	req := writeRequest{data: append([]byte(nil), data...), done: make(chan error, 1)}
+	select {
+	case e.writes <- req:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-e.ctx.Done():
+		return context.Canceled
+	}
+	select {
+	case err := <-req.done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-e.ctx.Done():
+		return context.Canceled
 	}
 }
 
-func (s *Session) Run(ctx context.Context) error {
-	if s.port == nil {
-		return errors.New("serial port is nil")
-	}
-	if s.terminal == nil {
-		return errors.New("terminal is nil")
-	}
-	if s.stdin == nil {
-		s.stdin = os.Stdin
-	}
-	if s.stdout == nil {
-		s.stdout = os.Stdout
-	}
-	if s.stderr == nil {
-		s.stderr = os.Stderr
-	}
-
-	if err := s.terminal.MakeRaw(); err != nil {
+func (e *endpoint) StartUpload(ctx context.Context, path string) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	defer s.terminal.Restore()
-	defer s.port.Close()
+	e.mu.Lock()
+	if e.stopping {
+		e.mu.Unlock()
+		return context.Canceled
+	}
+	if e.uploading {
+		e.mu.Unlock()
+		return ErrTransferActive
+	}
+	uploadCtx, cancel := context.WithCancel(e.ctx)
+	e.uploading = true
+	e.uploadCancel = cancel
+	e.workers.Add(1)
+	e.mu.Unlock()
 
-	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+	go e.runUpload(uploadCtx, path)
+	return nil
+}
 
-	errCh := make(chan error, 2)
-	var closeOnce sync.Once
-	closePort := func() {
-		closeOnce.Do(func() {
-			_ = s.port.Close()
-		})
+func (e *endpoint) runUpload(ctx context.Context, path string) {
+	defer e.workers.Done()
+	e.emit(UploadStarted{Path: path})
+
+	lastProgress := time.Time{}
+	n, err := transfer.UploadRawFile(ctx, path, writerFunc(e.write), func(written, total int64) {
+		now := time.Now()
+		if written != total && now.Sub(lastProgress) < 100*time.Millisecond {
+			return
+		}
+		lastProgress = now
+		e.emit(UploadProgress{Path: path, Written: written, Total: total})
+	})
+	if errors.Is(err, context.Canceled) {
+		err = context.Canceled
 	}
 
-	go func() {
-		errCh <- copySerialToOutputs(ctx, s.port, s.stdout, s.receiveLog, s.timeFormat)
-	}()
-	go func() {
-		errCh <- s.copyStdinToSerial(ctx, cancel)
-	}()
+	e.mu.Lock()
+	e.uploading = false
+	e.uploadCancel = nil
+	e.mu.Unlock()
 
-	var runErr error
-	select {
-	case <-ctx.Done():
-	case err := <-errCh:
-		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
-			runErr = err
-		}
+	e.emit(UploadFinished{Path: path, Bytes: n, Err: err})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		e.logWarn("transfer.upload_failed", "path", path, "bytes", n, "error", err)
+	} else if err == nil {
+		e.logInfo("transfer.upload_completed", "path", path, "bytes", n)
+	}
+}
+
+type writerFunc func(context.Context, []byte) error
+
+func (f writerFunc) Write(data []byte) (int, error) {
+	if err := f(context.Background(), data); err != nil {
+		return 0, err
+	}
+	return len(data), nil
+}
+
+func (e *endpoint) CancelUpload() {
+	e.mu.Lock()
+	cancel := e.uploadCancel
+	e.mu.Unlock()
+	if cancel != nil {
 		cancel()
 	}
-	closePort()
+}
 
+func (e *endpoint) Quit() { e.cancel() }
+
+func (e *endpoint) emit(event Event) bool {
 	select {
-	case err := <-errCh:
-		if runErr == nil && err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
-			runErr = err
-		}
-	default:
+	case e.events <- event:
+		return true
+	case <-e.ctx.Done():
+		return false
+	}
+}
+
+func (e *endpoint) stop() {
+	e.mu.Lock()
+	e.stopping = true
+	cancel := e.uploadCancel
+	e.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (e *endpoint) logInfo(event string, values ...any) {
+	if e.logger != nil {
+		e.logger.Info(event, values...)
+	}
+}
+
+func (e *endpoint) logWarn(event string, values ...any) {
+	if e.logger != nil {
+		e.logger.Warn(event, values...)
+	}
+}
+
+func (s *Session) Run(parent context.Context) error {
+	if s.cfg.Port == nil {
+		return errors.New("serial port is nil")
+	}
+	if s.cfg.Frontend == nil {
+		return errors.New("frontend is nil")
 	}
 
+	ctx, cancel := context.WithCancel(parent)
+	e := &endpoint{
+		ctx: ctx, cancel: cancel, events: make(chan Event, 32),
+		writes: make(chan writeRequest), logger: s.cfg.Logger,
+	}
+
+	results := make(chan error, 2)
+	var backend sync.WaitGroup
+	backend.Add(2)
+	go func() {
+		defer backend.Done()
+		results <- s.runWriter(ctx, e.writes)
+	}()
+	go func() {
+		defer backend.Done()
+		results <- s.runReader(ctx, e)
+	}()
+
+	frontendDone := make(chan error, 1)
+	go func() { frontendDone <- s.cfg.Frontend.Run(ctx, e) }()
+
+	var runErr error
+	backendResults := 0
+	frontendReturned := false
+	select {
+	case err := <-results:
+		runErr = normalizeRunError(err)
+		backendResults++
+	case err := <-frontendDone:
+		runErr = normalizeRunError(err)
+		frontendReturned = true
+	case <-ctx.Done():
+	case <-parent.Done():
+	}
+
+	cancel()
+	e.stop()
+	closeErr := s.cfg.Port.Close()
+	backend.Wait()
+	e.workers.Wait()
+	close(e.events)
+
+	for backendResults < 2 {
+		err := <-results
+		if runErr == nil {
+			runErr = normalizeRunError(err)
+		}
+		backendResults++
+	}
+	if !frontendReturned {
+		err := <-frontendDone
+		if runErr == nil {
+			runErr = normalizeRunError(err)
+		}
+	}
+	if closeErr != nil {
+		runErr = errors.Join(runErr, fmt.Errorf("close serial port: %w", closeErr))
+	}
 	return runErr
 }
 
-func copySerialToOutputs(ctx context.Context, serial io.Reader, stdout, receiveLog io.Writer, timeFormat string) error {
-	output := newReceivedOutput(stdout, receiveLog, timeFormat)
+func (s *Session) runWriter(ctx context.Context, requests <-chan writeRequest) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Canceled
+		case req := <-requests:
+			err := transfer.WriteFull(s.cfg.Port, req.data)
+			req.done <- err
+			if err != nil {
+				return fmt.Errorf("write serial port: %w", err)
+			}
+		}
+	}
+}
+
+func (s *Session) runReader(ctx context.Context, e *endpoint) error {
+	var recorder io.Writer
+	if s.cfg.ReceiveLog != nil {
+		recorder = s.cfg.ReceiveLog
+		if s.cfg.ReceiveTimeFormat != "" {
+			recorder = newLineTimeWriter(recorder, s.cfg.ReceiveTimeFormat)
+		}
+	}
 	buf := make([]byte, 4096)
 	for {
+		n, err := s.cfg.Port.Read(buf)
+		if n > 0 {
+			data := append([]byte(nil), buf[:n]...)
+			if recorder != nil {
+				if _, writeErr := recorder.Write(data); writeErr != nil {
+					return fmt.Errorf("record received data: %w", writeErr)
+				}
+			}
+			if !e.emit(Received{Data: data, At: time.Now()}) {
+				return context.Canceled
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("read serial port: %w", err)
+		}
 		select {
 		case <-ctx.Done():
 			return context.Canceled
 		default:
 		}
-
-		n, err := serial.Read(buf)
-		if n > 0 {
-			if writeErr := writeFull(output, buf[:n]); writeErr != nil {
-				return writeErr
-			}
-		}
-		if err != nil {
-			return err
-		}
 	}
 }
 
-func (s *Session) copyStdinToSerial(ctx context.Context, cancel context.CancelFunc) error {
-	machine := NewPrefixMachine(s.prefixKey)
-	buf := make([]byte, 1)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Canceled
-		default:
-		}
-
-		n, err := s.stdin.Read(buf)
-		if n > 0 {
-			action, handleErr := machine.HandleByte(buf[0], s.port)
-			if handleErr != nil {
-				return handleErr
-			}
-
-			switch action {
-			case ActionHelp:
-				printHelp(s.stderr)
-			case ActionUpload:
-				s.uploadFile(ctx)
-			case ActionQuit:
-				printLocalLine(s.stderr, "")
-				s.logInfo("session.closing", "reason", "user_request")
-				cancel()
-				return nil
-			}
-		}
-		if err != nil {
-			return err
-		}
+func normalizeRunError(err error) error {
+	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
+		return nil
 	}
-}
-
-func printHelp(w io.Writer) {
-	printLocalLine(w, "")
-	printLocalLine(w, "[[ xserial ]] local commands:")
-	printLocalLine(w, "  Ctrl-A h       show this help")
-	printLocalLine(w, "  Ctrl-A u       upload raw file")
-	printLocalLine(w, "  Ctrl-A q       quit")
-	printLocalLine(w, "  Ctrl-A Ctrl-A  send Ctrl-A")
-}
-
-func (s *Session) uploadFile(ctx context.Context) {
-	path, err := s.readUploadPath(ctx)
-	if err != nil {
-		s.logWarn("transfer.upload_canceled", "error", err)
-		return
-	}
-	if path == "" {
-		s.logInfo("transfer.upload_canceled", "reason", "empty_path")
-		return
-	}
-
-	n, err := UploadRawFile(ctx, path, s.port, s.stderr)
-	if err != nil {
-		s.logWarn("transfer.upload_failed", "path", path, "error", err)
-		return
-	}
-
-	s.logInfo("transfer.upload_completed", "path", path, "bytes", n)
-}
-
-func (s *Session) logInfo(event string, keyValues ...any) {
-	if s.logger != nil {
-		s.logger.Info(event, keyValues...)
-	}
-}
-
-func (s *Session) logWarn(event string, keyValues ...any) {
-	if s.logger != nil {
-		s.logger.Warn(event, keyValues...)
-	}
-}
-
-func printLocal(w io.Writer, text string) {
-	fmt.Fprint(w, text)
-}
-
-func printLocalLine(w io.Writer, line string) {
-	fmt.Fprintf(w, "%s\r\n", line)
+	return err
 }

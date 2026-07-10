@@ -16,7 +16,7 @@ xserial 是串口终端工具，不是串口库或协议框架。默认工作模
 - 设备收发的原始字节只走 `stdin`、`stdout` 与串口之间的数据通道。
 - xserial 自身的提示、帮助、进度和错误只写入 `stderr`，不得污染设备输出。
 - 交互会话默认使用终端 raw mode；本地输出必须使用 `CRLF`，以保证光标回到行首。
-- `Ctrl-A` 是默认 prefix key。prefix 后的按键属于本地命令；`Ctrl-A Ctrl-A` 向设备发送字节 `0x01`。
+- `Ctrl-P` 是默认 prefix key。prefix 后的按键属于本地命令；`Ctrl-P Ctrl-P` 向设备发送字节 `0x10`。架构上保留运行时替换 prefix key 的能力，但当前不提供对应 UI。
 - raw upload 是字节透传，不承诺校验、重传或断点续传。可靠传输应作为明确命名的独立能力或协议实现。
 - 连接命令保持 screen 风格的紧凑 interface：`xserial conn <port> [baud]`，波特率默认 `115200`，其他帧参数通过 `-c|--cfg data-bits,parity,stop-bits` 设置，默认 `8,N,1`。
 
@@ -96,7 +96,7 @@ internal/cmd  ──组装──>  application/session
 - 同一时刻只能有一个串口写入所有者。上传期间必须暂停普通键盘透传，避免文件字节与用户输入交错；未来多个写入来源应通过统一 writer/发送队列串行化。
 - 所有长操作接受 `context.Context`，定期响应取消，并返回可判定的错误；不要仅打印错误后继续运行。
 - 串口短写必须继续写完或返回 `io.ErrShortWrite`；不能假设一次 `Write` 会消费全部数据。
-- stdout 保持字节透明，不做换行转换、字符编码转换或日志插入。
+- raw 模式的 stdout 保持字节透明，不做换行转换、字符编码转换或日志插入。全屏 TUI 模式明确使用 stdout 绘制界面，设备原始字节由会话内核以事件形式交给 TUI。
 - 配置应是一次会话的显式值。除只读编译期默认值外，不使用可变全局状态。
 
 ## 扩展功能的落位规则

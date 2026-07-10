@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ZhiWei-Ou/xserial/internal/logging"
+	"github.com/ZhiWei-Ou/xserial/internal/rawui"
 	"github.com/ZhiWei-Ou/xserial/internal/serialport"
 	"github.com/ZhiWei-Ou/xserial/internal/session"
 	serialtui "github.com/ZhiWei-Ou/xserial/internal/tui"
@@ -143,27 +144,30 @@ func runConn(ctx context.Context, opts connOptions) error {
 		"parity", opts.parity,
 		"stop_bits", opts.stopBits,
 	)
+	var frontend session.Frontend
 	if opts.tui {
-		logger.Info("session.ready", "mode", "tui", "upload", "Ctrl-U", "quit", "Ctrl-C")
-		return serialtui.Run(ctx, serialtui.Config{
-			Port:       port,
+		logger.Info("session.ready", "mode", "tui", "commands", "Ctrl-P", "quit", "Ctrl-C")
+		frontend = serialtui.New(serialtui.Config{
 			Input:      os.Stdin,
 			Output:     os.Stdout,
-			ReceiveLog: receiveLog,
 			TimeFormat: opts.timeFormat,
 			PortName:   opts.port,
 			Baud:       opts.baud,
 			Frame:      fmt.Sprintf("%d,%s,%s", opts.dataBits, strings.ToUpper(opts.parity[:1]), opts.stopBits),
 		})
+	} else {
+		logger.Info("session.ready", "mode", "raw", "prefix", "Ctrl-P", "help", "Ctrl-P h", "quit", "Ctrl-P q")
+		frontend = rawui.New(rawui.Config{
+			Terminal: rawui.NewOSTerminal(os.Stdin),
+			Input:    os.Stdin,
+			Output:   os.Stdout,
+			Local:    os.Stderr,
+		})
 	}
-	logger.Info("session.ready", "mode", "raw", "prefix", "Ctrl-A", "help", "Ctrl-A h", "quit", "Ctrl-A q")
 
 	s := session.New(session.Config{
 		Port:              port,
-		Terminal:          session.NewOSTerminal(os.Stdin),
-		Stdin:             os.Stdin,
-		Stdout:            os.Stdout,
-		Stderr:            os.Stderr,
+		Frontend:          frontend,
 		ReceiveLog:        receiveLog,
 		ReceiveTimeFormat: opts.timeFormat,
 		Logger:            logger,

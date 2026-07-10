@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"runtime/debug"
 
@@ -38,6 +39,10 @@ func NewRootCommand() *cobra.Command {
 
 func Execute() error {
 	return NewRootCommand().Execute()
+}
+
+func ExecuteContext(ctx context.Context) error {
+	return NewRootCommand().ExecuteContext(ctx)
 }
 
 func currentVersion() string {
