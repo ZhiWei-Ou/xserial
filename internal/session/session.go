@@ -53,23 +53,25 @@ func (t *OSTerminal) Restore() error {
 }
 
 type Config struct {
-	Port      SerialPort
-	Terminal  Terminal
-	Stdin     io.Reader
-	Stdout    io.Writer
-	Stderr    io.Writer
-	PrefixKey byte
-	Logger    Logger
+	Port       SerialPort
+	Terminal   Terminal
+	Stdin      io.Reader
+	Stdout     io.Writer
+	Stderr     io.Writer
+	ReceiveLog io.Writer
+	PrefixKey  byte
+	Logger     Logger
 }
 
 type Session struct {
-	port      SerialPort
-	terminal  Terminal
-	stdin     io.Reader
-	stdout    io.Writer
-	stderr    io.Writer
-	prefixKey byte
-	logger    Logger
+	port       SerialPort
+	terminal   Terminal
+	stdin      io.Reader
+	stdout     io.Writer
+	stderr     io.Writer
+	receiveLog io.Writer
+	prefixKey  byte
+	logger     Logger
 }
 
 func New(cfg Config) *Session {
@@ -79,13 +81,14 @@ func New(cfg Config) *Session {
 	}
 
 	return &Session{
-		port:      cfg.Port,
-		terminal:  cfg.Terminal,
-		stdin:     cfg.Stdin,
-		stdout:    cfg.Stdout,
-		stderr:    cfg.Stderr,
-		prefixKey: prefixKey,
-		logger:    cfg.Logger,
+		port:       cfg.Port,
+		terminal:   cfg.Terminal,
+		stdin:      cfg.Stdin,
+		stdout:     cfg.Stdout,
+		stderr:     cfg.Stderr,
+		receiveLog: cfg.ReceiveLog,
+		prefixKey:  prefixKey,
+		logger:     cfg.Logger,
 	}
 }
 
@@ -124,7 +127,7 @@ func (s *Session) Run(ctx context.Context) error {
 	}
 
 	go func() {
-		errCh <- copySerialToStdout(ctx, s.port, s.stdout)
+		errCh <- copySerialToOutputs(ctx, s.port, s.stdout, s.receiveLog)
 	}()
 	go func() {
 		errCh <- s.copyStdinToSerial(ctx, cancel)
@@ -152,7 +155,7 @@ func (s *Session) Run(ctx context.Context) error {
 	return runErr
 }
 
-func copySerialToStdout(ctx context.Context, serial io.Reader, stdout io.Writer) error {
+func copySerialToOutputs(ctx context.Context, serial io.Reader, stdout, receiveLog io.Writer) error {
 	buf := make([]byte, 4096)
 	for {
 		select {
@@ -163,8 +166,14 @@ func copySerialToStdout(ctx context.Context, serial io.Reader, stdout io.Writer)
 
 		n, err := serial.Read(buf)
 		if n > 0 {
-			if _, writeErr := stdout.Write(buf[:n]); writeErr != nil {
+			data := buf[:n]
+			if writeErr := writeFull(stdout, data); writeErr != nil {
 				return writeErr
+			}
+			if receiveLog != nil {
+				if writeErr := writeFull(receiveLog, data); writeErr != nil {
+					return fmt.Errorf("write receive log: %w", writeErr)
+				}
 			}
 		}
 		if err != nil {

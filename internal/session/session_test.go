@@ -151,13 +151,32 @@ func TestSessionCopiesSerialToStdout(t *testing.T) {
 	port := newFakePort([]byte("device output"))
 	var stdout bytes.Buffer
 
-	err := copySerialToStdout(context.Background(), port, &stdout)
+	err := copySerialToOutputs(context.Background(), port, &stdout, nil)
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("copySerialToStdout() error = %v, want EOF", err)
 	}
 
 	if got := stdout.String(); got != "device output" {
 		t.Fatalf("stdout = %q, want %q", got, "device output")
+	}
+}
+
+func TestSessionSavesReceivedBytes(t *testing.T) {
+	port := newFakePort([]byte{'a', 0, 'b', '\n'})
+	var stdout bytes.Buffer
+	var receiveLog bytes.Buffer
+
+	err := copySerialToOutputs(context.Background(), port, &stdout, &receiveLog)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("copySerialToOutputs() error = %v, want EOF", err)
+	}
+
+	want := []byte{'a', 0, 'b', '\n'}
+	if got := stdout.Bytes(); !bytes.Equal(got, want) {
+		t.Fatalf("stdout = %v, want %v", got, want)
+	}
+	if got := receiveLog.Bytes(); !bytes.Equal(got, want) {
+		t.Fatalf("receive log = %v, want %v", got, want)
 	}
 }
 

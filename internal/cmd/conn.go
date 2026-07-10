@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -20,12 +21,14 @@ type connOptions struct {
 	dataBits int
 	parity   string
 	stopBits string
+	logPath  string
 }
 
 const defaultConnBaud = 115200
 
 func NewConnCommand() *cobra.Command {
 	var cfg string
+	var logPath string
 
 	connCmd := &cobra.Command{
 		Use:     "conn <port> [baud]",
@@ -39,7 +42,7 @@ func NewConnCommand() *cobra.Command {
 			return cobra.RangeArgs(1, 2)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts, err := parseConnOptions(args, cfg)
+			opts, err := parseConnOptions(args, cfg, logPath)
 			if err != nil {
 				return err
 			}
@@ -48,14 +51,16 @@ func NewConnCommand() *cobra.Command {
 	}
 
 	connCmd.Flags().StringVarP(&cfg, "cfg", "c", "8,N,1", "serial frame as data-bits,parity,stop-bits (example: 8,N|n,1)")
+	connCmd.Flags().StringVar(&logPath, "log", "", "append received bytes to file")
 
 	return connCmd
 }
 
-func parseConnOptions(args []string, cfg string) (connOptions, error) {
+func parseConnOptions(args []string, cfg, logPath string) (connOptions, error) {
 	opts := connOptions{
-		port: args[0],
-		baud: defaultConnBaud,
+		port:    args[0],
+		baud:    defaultConnBaud,
+		logPath: logPath,
 	}
 
 	if len(args) == 2 {
@@ -112,6 +117,15 @@ func runConn(ctx context.Context, opts connOptions) error {
 		return fmt.Errorf("open serial port %q: %w", opts.port, err)
 	}
 
+	receiveLog, err := openReceiveLog(opts.logPath)
+	if err != nil {
+		_ = port.Close()
+		return err
+	}
+	if receiveLog != nil {
+		defer receiveLog.Close()
+	}
+
 	logger.Info(
 		"session.connected",
 		"port", opts.port,
@@ -123,12 +137,25 @@ func runConn(ctx context.Context, opts connOptions) error {
 	logger.Info("session.ready", "prefix", "Ctrl-A", "help", "Ctrl-A h", "quit", "Ctrl-A q")
 
 	s := session.New(session.Config{
-		Port:     port,
-		Terminal: session.NewOSTerminal(os.Stdin),
-		Stdin:    os.Stdin,
-		Stdout:   os.Stdout,
-		Stderr:   os.Stderr,
-		Logger:   logger,
+		Port:       port,
+		Terminal:   session.NewOSTerminal(os.Stdin),
+		Stdin:      os.Stdin,
+		Stdout:     os.Stdout,
+		Stderr:     os.Stderr,
+		ReceiveLog: receiveLog,
+		Logger:     logger,
 	})
 	return s.Run(ctx)
+}
+
+func openReceiveLog(path string) (io.WriteCloser, error) {
+	if path == "" {
+		return nil, nil
+	}
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open receive log %q: %w", path, err)
+	}
+	return file, nil
 }
