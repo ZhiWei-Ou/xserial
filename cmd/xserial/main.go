@@ -1,15 +1,15 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/ZhiWei-Ou/xserial/internal/cmd"
+	"github.com/ZhiWei-Ou/xserial/internal/logging"
 )
 
 func main() {
 	if err := cmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		logging.New(os.Stderr).Error("application.failed", "error", err)
 		os.Exit(1)
 	}
 }

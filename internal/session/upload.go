@@ -101,7 +101,7 @@ func newUploadProgress(size int64, output io.Writer) rawProgress {
 	return progressbar.NewOptions64(
 		size,
 		progressbar.OptionSetWriter(output),
-		progressbar.OptionSetDescription("[xserial] upload"),
+		progressbar.OptionSetDescription("[[ xserial | TRANSFER ]]"),
 		progressbar.OptionSetWidth(24),
 		progressbar.OptionShowBytes(true),
 		progressbar.OptionShowTotalBytes(true),
@@ -114,7 +114,7 @@ func newUploadProgress(size int64, output io.Writer) rawProgress {
 }
 
 func (s *Session) readUploadPath(ctx context.Context) (string, error) {
-	printLocal(s.stderr, "\r\n[xserial] upload file: ")
+	printLocal(s.stderr, "\r\n[[ xserial ]] upload file: ")
 
 	var path strings.Builder
 	buf := make([]byte, 1)

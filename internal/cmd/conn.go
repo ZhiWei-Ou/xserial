@@ -2,9 +2,9 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"os"
 
+	"github.com/ZhiWei-Ou/xserial/internal/logging"
 	"github.com/ZhiWei-Ou/xserial/internal/serialport"
 	"github.com/ZhiWei-Ou/xserial/internal/session"
 	"github.com/spf13/cobra"
@@ -45,6 +45,7 @@ func NewConnCommand() *cobra.Command {
 }
 
 func runConn(ctx context.Context, opts connOptions) error {
+	logger := logging.New(os.Stderr)
 	port, err := serialport.Open(opts.port, serialport.Config{
 		BaudRate: opts.baud,
 		DataBits: opts.dataBits,
@@ -55,8 +56,15 @@ func runConn(ctx context.Context, opts connOptions) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "[xserial] connected to %s at %d baud\r\n", opts.port, opts.baud)
-	fmt.Fprintln(os.Stderr, "[xserial] prefix: Ctrl-A, help: Ctrl-A h, quit: Ctrl-A q")
+	logger.Info(
+		"session.connected",
+		"port", opts.port,
+		"baud", opts.baud,
+		"data_bits", opts.dataBits,
+		"parity", opts.parity,
+		"stop_bits", opts.stopBits,
+	)
+	logger.Info("session.ready", "prefix", "Ctrl-A", "help", "Ctrl-A h", "quit", "Ctrl-A q")
 
 	s := session.New(session.Config{
 		Port:     port,
@@ -64,6 +72,7 @@ func runConn(ctx context.Context, opts connOptions) error {
 		Stdin:    os.Stdin,
 		Stdout:   os.Stdout,
 		Stderr:   os.Stderr,
+		Logger:   logger,
 	})
 	return s.Run(ctx)
 }

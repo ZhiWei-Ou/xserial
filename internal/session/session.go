@@ -22,6 +22,11 @@ type Terminal interface {
 	Restore() error
 }
 
+type Logger interface {
+	Info(event string, keyValues ...any)
+	Warn(event string, keyValues ...any)
+}
+
 type OSTerminal struct {
 	file     *os.File
 	oldState *term.State
@@ -54,6 +59,7 @@ type Config struct {
 	Stdout    io.Writer
 	Stderr    io.Writer
 	PrefixKey byte
+	Logger    Logger
 }
 
 type Session struct {
@@ -63,6 +69,7 @@ type Session struct {
 	stdout    io.Writer
 	stderr    io.Writer
 	prefixKey byte
+	logger    Logger
 }
 
 func New(cfg Config) *Session {
@@ -78,6 +85,7 @@ func New(cfg Config) *Session {
 		stdout:    cfg.Stdout,
 		stderr:    cfg.Stderr,
 		prefixKey: prefixKey,
+		logger:    cfg.Logger,
 	}
 }
 
@@ -190,7 +198,7 @@ func (s *Session) copyStdinToSerial(ctx context.Context, cancel context.CancelFu
 				s.uploadFile(ctx)
 			case ActionQuit:
 				printLocalLine(s.stderr, "")
-				printLocalLine(s.stderr, "[xserial] closing")
+				s.logInfo("session.closing", "reason", "user_request")
 				cancel()
 				return nil
 			}
@@ -203,7 +211,7 @@ func (s *Session) copyStdinToSerial(ctx context.Context, cancel context.CancelFu
 
 func printHelp(w io.Writer) {
 	printLocalLine(w, "")
-	printLocalLine(w, "[xserial] local commands:")
+	printLocalLine(w, "[[ xserial ]] local commands:")
 	printLocalLine(w, "  Ctrl-A h       show this help")
 	printLocalLine(w, "  Ctrl-A u       upload raw file")
 	printLocalLine(w, "  Ctrl-A q       quit")
@@ -213,21 +221,33 @@ func printHelp(w io.Writer) {
 func (s *Session) uploadFile(ctx context.Context) {
 	path, err := s.readUploadPath(ctx)
 	if err != nil {
-		printLocalLine(s.stderr, fmt.Sprintf("[xserial] upload canceled: %v", err))
+		s.logWarn("transfer.upload_canceled", "error", err)
 		return
 	}
 	if path == "" {
-		printLocalLine(s.stderr, "[xserial] upload canceled")
+		s.logInfo("transfer.upload_canceled", "reason", "empty_path")
 		return
 	}
 
 	n, err := uploadRawFile(ctx, path, s.port, s.stderr)
 	if err != nil {
-		printLocalLine(s.stderr, fmt.Sprintf("[xserial] upload failed: %v", err))
+		s.logWarn("transfer.upload_failed", "path", path, "error", err)
 		return
 	}
 
-	printLocalLine(s.stderr, fmt.Sprintf("[xserial] uploaded %d bytes", n))
+	s.logInfo("transfer.upload_completed", "path", path, "bytes", n)
+}
+
+func (s *Session) logInfo(event string, keyValues ...any) {
+	if s.logger != nil {
+		s.logger.Info(event, keyValues...)
+	}
+}
+
+func (s *Session) logWarn(event string, keyValues ...any) {
+	if s.logger != nil {
+		s.logger.Warn(event, keyValues...)
+	}
 }
 
 func printLocal(w io.Writer, text string) {

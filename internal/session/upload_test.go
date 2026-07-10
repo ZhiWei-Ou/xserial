@@ -29,7 +29,7 @@ func TestUploadRawFileSendsFileContent(t *testing.T) {
 	if got := serial.String(); got != "raw file content" {
 		t.Fatalf("serial output = %q, want %q", got, "raw file content")
 	}
-	if got := stderr.String(); !strings.Contains(got, "[xserial] upload") {
+	if got := stderr.String(); !strings.Contains(got, "[[ xserial | TRANSFER ]]") {
 		t.Fatalf("stderr = %q, want upload progress", got)
 	}
 }

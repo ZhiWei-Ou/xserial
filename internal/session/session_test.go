@@ -70,6 +70,18 @@ type fakeTerminal struct {
 	restored bool
 }
 
+type recordingLogger struct {
+	infoEvent  string
+	infoValues []any
+}
+
+func (l *recordingLogger) Info(event string, keyValues ...any) {
+	l.infoEvent = event
+	l.infoValues = append([]any(nil), keyValues...)
+}
+
+func (l *recordingLogger) Warn(string, ...any) {}
+
 func (t *fakeTerminal) MakeRaw() error {
 	t.madeRaw = true
 	return nil
@@ -104,6 +116,34 @@ func TestSessionPassesStdinToSerial(t *testing.T) {
 	}
 	if !terminal.madeRaw || !terminal.restored {
 		t.Fatalf("terminal madeRaw=%v restored=%v, want both true", terminal.madeRaw, terminal.restored)
+	}
+}
+
+func TestSessionLogsUserRequestedClosing(t *testing.T) {
+	port := &fakePort{
+		read:      bytes.NewBuffer(nil),
+		blockRead: true,
+		readDone:  make(chan struct{}),
+	}
+	logger := &recordingLogger{}
+	session := New(Config{
+		Port:     port,
+		Terminal: &fakeTerminal{},
+		Stdin:    bytes.NewReader([]byte{DefaultPrefixKey, 'q'}),
+		Stdout:   io.Discard,
+		Stderr:   io.Discard,
+		Logger:   logger,
+	})
+
+	if err := session.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if logger.infoEvent != "session.closing" {
+		t.Fatalf("logged event = %q, want session.closing", logger.infoEvent)
+	}
+	if len(logger.infoValues) != 2 || logger.infoValues[0] != "reason" || logger.infoValues[1] != "user_request" {
+		t.Fatalf("logged values = %#v, want reason=user_request", logger.infoValues)
 	}
 }
 
@@ -148,7 +188,7 @@ func TestPrintHelpUsesCRLFInRawMode(t *testing.T) {
 	printHelp(&stderr)
 
 	want := "\r\n" +
-		"[xserial] local commands:\r\n" +
+		"[[ xserial ]] local commands:\r\n" +
 		"  Ctrl-A h       show this help\r\n" +
 		"  Ctrl-A u       upload raw file\r\n" +
 		"  Ctrl-A q       quit\r\n" +
