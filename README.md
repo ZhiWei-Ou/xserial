@@ -165,17 +165,41 @@ xserial conn /dev/ttyUSB0 \
   --time "2006-01-02 15:04:05.000"
 ```
 
-时间格式遵循 Go 的 reference time 写法。raw 模式下，时间戳只进入日志文件，不会插入设备输出；TUI 会同时在显示内容中使用该格式。
+时间格式遵循 Go 的 reference time 写法，也就是用固定时间 `Mon Jan 2 15:04:05 MST 2006` 的组成部分描述目标格式。下面是几种常见写法：
+
+| `--time` 参数 | 适合场景 |
+|---|---|
+| `"15:04:05"` | 简洁的时分秒 |
+| `"15:04:05.000"` | 带毫秒的设备调试 |
+| `"2006-01-02 15:04:05"` | 易读的完整本地时间 |
+| `"2006-01-02T15:04:05.000Z07:00"` | 带时区的 ISO 8601 风格时间 |
+| `"Jan 02 15:04:05"` | 类似传统系统日志的格式 |
+
+raw 模式下，时间戳只进入日志文件，不会插入设备输出；TUI 会同时在显示内容中使用该格式。
 
 ## Shell completion
 
-xserial 使用 Cobra 提供命令补全。例如为 Zsh 生成补全脚本：
+xserial 可以为常见 Shell 生成命令补全脚本。以下命令会在当前 Shell 会话中启用补全。
+
+### Bash
+
+```bash
+source <(xserial completion bash)
+```
+
+### Zsh
 
 ```bash
 source <(xserial completion zsh)
 ```
 
-其他 Shell 的具体安装方式可以通过下面的命令查看：
+### PowerShell
+
+```powershell
+xserial completion powershell | Out-String | Invoke-Expression
+```
+
+如果希望每次打开终端时自动启用，可以把对应命令加入 `~/.bashrc`、`~/.zshrc` 或 PowerShell 的 `$PROFILE`。更多补全选项可以通过下面的命令查看：
 
 ```bash
 xserial completion --help
