@@ -151,7 +151,7 @@ func TestSessionCopiesSerialToStdout(t *testing.T) {
 	port := newFakePort([]byte("device output"))
 	var stdout bytes.Buffer
 
-	err := copySerialToOutputs(context.Background(), port, &stdout, nil)
+	err := copySerialToOutputs(context.Background(), port, &stdout, nil, "")
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("copySerialToStdout() error = %v, want EOF", err)
 	}
@@ -166,7 +166,7 @@ func TestSessionSavesReceivedBytes(t *testing.T) {
 	var stdout bytes.Buffer
 	var receiveLog bytes.Buffer
 
-	err := copySerialToOutputs(context.Background(), port, &stdout, &receiveLog)
+	err := copySerialToOutputs(context.Background(), port, &stdout, &receiveLog, "")
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("copySerialToOutputs() error = %v, want EOF", err)
 	}

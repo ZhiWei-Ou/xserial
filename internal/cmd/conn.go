@@ -16,12 +16,13 @@ import (
 )
 
 type connOptions struct {
-	port     string
-	baud     int
-	dataBits int
-	parity   string
-	stopBits string
-	logPath  string
+	port       string
+	baud       int
+	dataBits   int
+	parity     string
+	stopBits   string
+	logPath    string
+	timeFormat string
 }
 
 const defaultConnBaud = 115200
@@ -29,6 +30,7 @@ const defaultConnBaud = 115200
 func NewConnCommand() *cobra.Command {
 	var cfg string
 	var logPath string
+	var timeFormat string
 
 	connCmd := &cobra.Command{
 		Use:     "conn <port> [baud]",
@@ -42,7 +44,7 @@ func NewConnCommand() *cobra.Command {
 			return cobra.RangeArgs(1, 2)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts, err := parseConnOptions(args, cfg, logPath)
+			opts, err := parseConnOptions(args, cfg, logPath, timeFormat)
 			if err != nil {
 				return err
 			}
@@ -52,15 +54,17 @@ func NewConnCommand() *cobra.Command {
 
 	connCmd.Flags().StringVarP(&cfg, "cfg", "c", "8,N,1", "serial frame as data-bits,parity,stop-bits (example: 8,N|n,1)")
 	connCmd.Flags().StringVar(&logPath, "log", "", "append received bytes to file")
+	connCmd.Flags().StringVar(&timeFormat, "time", "", "Go time format prepended to each received line")
 
 	return connCmd
 }
 
-func parseConnOptions(args []string, cfg, logPath string) (connOptions, error) {
+func parseConnOptions(args []string, cfg, logPath, timeFormat string) (connOptions, error) {
 	opts := connOptions{
-		port:    args[0],
-		baud:    defaultConnBaud,
-		logPath: logPath,
+		port:       args[0],
+		baud:       defaultConnBaud,
+		logPath:    logPath,
+		timeFormat: timeFormat,
 	}
 
 	if len(args) == 2 {
@@ -137,13 +141,14 @@ func runConn(ctx context.Context, opts connOptions) error {
 	logger.Info("session.ready", "prefix", "Ctrl-A", "help", "Ctrl-A h", "quit", "Ctrl-A q")
 
 	s := session.New(session.Config{
-		Port:       port,
-		Terminal:   session.NewOSTerminal(os.Stdin),
-		Stdin:      os.Stdin,
-		Stdout:     os.Stdout,
-		Stderr:     os.Stderr,
-		ReceiveLog: receiveLog,
-		Logger:     logger,
+		Port:              port,
+		Terminal:          session.NewOSTerminal(os.Stdin),
+		Stdin:             os.Stdin,
+		Stdout:            os.Stdout,
+		Stderr:            os.Stderr,
+		ReceiveLog:        receiveLog,
+		ReceiveTimeFormat: opts.timeFormat,
+		Logger:            logger,
 	})
 	return s.Run(ctx)
 }

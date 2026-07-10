@@ -53,14 +53,15 @@ func (t *OSTerminal) Restore() error {
 }
 
 type Config struct {
-	Port       SerialPort
-	Terminal   Terminal
-	Stdin      io.Reader
-	Stdout     io.Writer
-	Stderr     io.Writer
-	ReceiveLog io.Writer
-	PrefixKey  byte
-	Logger     Logger
+	Port              SerialPort
+	Terminal          Terminal
+	Stdin             io.Reader
+	Stdout            io.Writer
+	Stderr            io.Writer
+	ReceiveLog        io.Writer
+	ReceiveTimeFormat string
+	PrefixKey         byte
+	Logger            Logger
 }
 
 type Session struct {
@@ -70,6 +71,7 @@ type Session struct {
 	stdout     io.Writer
 	stderr     io.Writer
 	receiveLog io.Writer
+	timeFormat string
 	prefixKey  byte
 	logger     Logger
 }
@@ -87,6 +89,7 @@ func New(cfg Config) *Session {
 		stdout:     cfg.Stdout,
 		stderr:     cfg.Stderr,
 		receiveLog: cfg.ReceiveLog,
+		timeFormat: cfg.ReceiveTimeFormat,
 		prefixKey:  prefixKey,
 		logger:     cfg.Logger,
 	}
@@ -127,7 +130,7 @@ func (s *Session) Run(ctx context.Context) error {
 	}
 
 	go func() {
-		errCh <- copySerialToOutputs(ctx, s.port, s.stdout, s.receiveLog)
+		errCh <- copySerialToOutputs(ctx, s.port, s.stdout, s.receiveLog, s.timeFormat)
 	}()
 	go func() {
 		errCh <- s.copyStdinToSerial(ctx, cancel)
@@ -155,7 +158,8 @@ func (s *Session) Run(ctx context.Context) error {
 	return runErr
 }
 
-func copySerialToOutputs(ctx context.Context, serial io.Reader, stdout, receiveLog io.Writer) error {
+func copySerialToOutputs(ctx context.Context, serial io.Reader, stdout, receiveLog io.Writer, timeFormat string) error {
+	output := newReceivedOutput(stdout, receiveLog, timeFormat)
 	buf := make([]byte, 4096)
 	for {
 		select {
@@ -166,14 +170,8 @@ func copySerialToOutputs(ctx context.Context, serial io.Reader, stdout, receiveL
 
 		n, err := serial.Read(buf)
 		if n > 0 {
-			data := buf[:n]
-			if writeErr := writeFull(stdout, data); writeErr != nil {
+			if writeErr := writeFull(output, buf[:n]); writeErr != nil {
 				return writeErr
-			}
-			if receiveLog != nil {
-				if writeErr := writeFull(receiveLog, data); writeErr != nil {
-					return fmt.Errorf("write receive log: %w", writeErr)
-				}
 			}
 		}
 		if err != nil {
