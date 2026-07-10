@@ -2,7 +2,11 @@ package cmd
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/ZhiWei-Ou/xserial/internal/logging"
 	"github.com/ZhiWei-Ou/xserial/internal/serialport"
@@ -18,30 +22,82 @@ type connOptions struct {
 	stopBits string
 }
 
+const defaultConnBaud = 115200
+
 func NewConnCommand() *cobra.Command {
-	opts := connOptions{
-		baud:     115200,
-		dataBits: 8,
-		parity:   "none",
-		stopBits: "1",
-	}
+	var cfg string
 
 	connCmd := &cobra.Command{
-		Use:   "conn <port>",
-		Short: "Connect to a serial port",
-		Args:  cobra.ExactArgs(1),
+		Use:     "conn <port> [baud]",
+		Short:   "Connect to a serial port",
+		Example: "  xserial conn /dev/tty.usbserial\n  xserial conn /dev/tty.usbserial 9600 -c 8,N,1",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				_ = cmd.Help()
+				return errors.New("serial port is required")
+			}
+			return cobra.RangeArgs(1, 2)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.port = args[0]
+			opts, err := parseConnOptions(args, cfg)
+			if err != nil {
+				return err
+			}
 			return runConn(cmd.Context(), opts)
 		},
 	}
 
-	connCmd.Flags().IntVarP(&opts.baud, "baud", "b", opts.baud, "baud rate")
-	connCmd.Flags().IntVar(&opts.dataBits, "data-bits", opts.dataBits, "data bits")
-	connCmd.Flags().StringVar(&opts.parity, "parity", opts.parity, "parity: none, odd, even, mark, space")
-	connCmd.Flags().StringVar(&opts.stopBits, "stop-bits", opts.stopBits, "stop bits: 1, 1.5, 2")
+	connCmd.Flags().StringVarP(&cfg, "cfg", "c", "8,N,1", "serial frame as data-bits,parity,stop-bits (example: 8,N|n,1)")
 
 	return connCmd
+}
+
+func parseConnOptions(args []string, cfg string) (connOptions, error) {
+	opts := connOptions{
+		port: args[0],
+		baud: defaultConnBaud,
+	}
+
+	if len(args) == 2 {
+		baud, err := strconv.Atoi(args[1])
+		if err != nil || baud <= 0 {
+			return connOptions{}, fmt.Errorf("invalid baud rate %q", args[1])
+		}
+		opts.baud = baud
+	}
+
+	fields := strings.Split(cfg, ",")
+	if len(fields) != 3 {
+		return connOptions{}, fmt.Errorf("invalid serial cfg %q: want data-bits,parity,stop-bits", cfg)
+	}
+
+	dataBits, err := strconv.Atoi(strings.TrimSpace(fields[0]))
+	if err != nil || dataBits <= 0 {
+		return connOptions{}, fmt.Errorf("invalid data bits %q", fields[0])
+	}
+	opts.dataBits = dataBits
+
+	switch strings.ToUpper(strings.TrimSpace(fields[1])) {
+	case "N":
+		opts.parity = "none"
+	case "O":
+		opts.parity = "odd"
+	case "E":
+		opts.parity = "even"
+	case "M":
+		opts.parity = "mark"
+	case "S":
+		opts.parity = "space"
+	default:
+		return connOptions{}, fmt.Errorf("invalid parity %q: want N, O, E, M, or S", fields[1])
+	}
+
+	opts.stopBits = strings.TrimSpace(fields[2])
+	if opts.stopBits != "1" && opts.stopBits != "1.5" && opts.stopBits != "2" {
+		return connOptions{}, fmt.Errorf("invalid stop bits %q: want 1, 1.5, or 2", fields[2])
+	}
+
+	return opts, nil
 }
 
 func runConn(ctx context.Context, opts connOptions) error {
@@ -53,7 +109,7 @@ func runConn(ctx context.Context, opts connOptions) error {
 		StopBits: opts.stopBits,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("open serial port %q: %w", opts.port, err)
 	}
 
 	logger.Info(
