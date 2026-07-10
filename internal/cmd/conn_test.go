@@ -64,6 +64,11 @@ func TestConnExposesReceiveLog(t *testing.T) {
 	if flag := cmd.Flags().Lookup("log-time-format"); flag != nil {
 		t.Fatal("legacy --log-time-format flag exists, want nil")
 	}
+	if flag := cmd.Flags().Lookup("tui"); flag == nil {
+		t.Fatal("--tui flag not found")
+	} else if flag.DefValue != "false" {
+		t.Fatalf("--tui default = %q, want false", flag.DefValue)
+	}
 }
 
 func TestOpenReceiveLogWithoutPathReturnsNilWriter(t *testing.T) {
@@ -88,7 +93,7 @@ func TestConnDoesNotExposePortFlag(t *testing.T) {
 }
 
 func TestParseConnOptionsUsesScreenStyleDefaults(t *testing.T) {
-	opts, err := parseConnOptions([]string{"/dev/ttyUSB0"}, "8,N,1", "", "")
+	opts, err := parseConnOptions([]string{"/dev/ttyUSB0"}, "8,N,1", "", "", false)
 	if err != nil {
 		t.Fatalf("parseConnOptions() error = %v", err)
 	}
@@ -99,7 +104,7 @@ func TestParseConnOptionsUsesScreenStyleDefaults(t *testing.T) {
 }
 
 func TestParseConnOptionsAcceptsBaudAndLowercaseParity(t *testing.T) {
-	opts, err := parseConnOptions([]string{"COM3", "9600"}, "7,e,2", "capture.log", "15:04:05")
+	opts, err := parseConnOptions([]string{"COM3", "9600"}, "7,e,2", "capture.log", "15:04:05", true)
 	if err != nil {
 		t.Fatalf("parseConnOptions() error = %v", err)
 	}
@@ -113,12 +118,15 @@ func TestParseConnOptionsAcceptsBaudAndLowercaseParity(t *testing.T) {
 	if opts.timeFormat != "15:04:05" {
 		t.Fatalf("time format = %q, want 15:04:05", opts.timeFormat)
 	}
+	if !opts.tui {
+		t.Fatal("tui = false, want true")
+	}
 }
 
 func TestParseConnOptionsRejectsInvalidConfig(t *testing.T) {
 	for _, cfg := range []string{"8,N", "8,X,1", "8,N,3"} {
 		t.Run(cfg, func(t *testing.T) {
-			if _, err := parseConnOptions([]string{"COM3"}, cfg, "", ""); err == nil {
+			if _, err := parseConnOptions([]string{"COM3"}, cfg, "", "", false); err == nil {
 				t.Fatalf("parseConnOptions(%q) error = nil, want error", cfg)
 			}
 		})

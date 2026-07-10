@@ -236,7 +236,7 @@ func (s *Session) uploadFile(ctx context.Context) {
 		return
 	}
 
-	n, err := uploadRawFile(ctx, path, s.port, s.stderr)
+	n, err := UploadRawFile(ctx, path, s.port, s.stderr)
 	if err != nil {
 		s.logWarn("transfer.upload_failed", "path", path, "error", err)
 		return

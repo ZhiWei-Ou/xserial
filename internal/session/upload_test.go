@@ -19,7 +19,7 @@ func TestUploadRawFileSendsFileContent(t *testing.T) {
 
 	var serial bytes.Buffer
 	var stderr bytes.Buffer
-	n, err := uploadRawFile(context.Background(), path, &serial, &stderr)
+	n, err := UploadRawFile(context.Background(), path, &serial, &stderr)
 	if err != nil {
 		t.Fatalf("uploadRawFile() error = %v", err)
 	}
@@ -37,7 +37,7 @@ func TestUploadRawFileSendsFileContent(t *testing.T) {
 func TestUploadRawFileRejectsDirectory(t *testing.T) {
 	var serial bytes.Buffer
 
-	_, err := uploadRawFile(context.Background(), t.TempDir(), &serial, io.Discard)
+	_, err := UploadRawFile(context.Background(), t.TempDir(), &serial, io.Discard)
 	if err == nil {
 		t.Fatalf("uploadRawFile() error = nil, want error")
 	}

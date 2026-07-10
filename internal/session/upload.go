@@ -14,7 +14,7 @@ import (
 
 const defaultUploadChunkSize = 256
 
-func uploadRawFile(ctx context.Context, path string, serial io.Writer, progress io.Writer) (int64, error) {
+func UploadRawFile(ctx context.Context, path string, serial io.Writer, progress io.Writer) (int64, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return 0, err

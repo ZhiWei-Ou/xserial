@@ -12,6 +12,7 @@ import (
 	"github.com/ZhiWei-Ou/xserial/internal/logging"
 	"github.com/ZhiWei-Ou/xserial/internal/serialport"
 	"github.com/ZhiWei-Ou/xserial/internal/session"
+	serialtui "github.com/ZhiWei-Ou/xserial/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -23,6 +24,7 @@ type connOptions struct {
 	stopBits   string
 	logPath    string
 	timeFormat string
+	tui        bool
 }
 
 const defaultConnBaud = 115200
@@ -31,6 +33,7 @@ func NewConnCommand() *cobra.Command {
 	var cfg string
 	var logPath string
 	var timeFormat string
+	var useTUI bool
 
 	connCmd := &cobra.Command{
 		Use:     "conn <port> [baud]",
@@ -44,7 +47,7 @@ func NewConnCommand() *cobra.Command {
 			return cobra.RangeArgs(1, 2)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts, err := parseConnOptions(args, cfg, logPath, timeFormat)
+			opts, err := parseConnOptions(args, cfg, logPath, timeFormat, useTUI)
 			if err != nil {
 				return err
 			}
@@ -55,16 +58,18 @@ func NewConnCommand() *cobra.Command {
 	connCmd.Flags().StringVarP(&cfg, "cfg", "c", "8,N,1", "serial frame as data-bits,parity,stop-bits (example: 8,N|n,1)")
 	connCmd.Flags().StringVar(&logPath, "log", "", "append received bytes to file")
 	connCmd.Flags().StringVar(&timeFormat, "time", "", "Go time format prepended to each received line")
+	connCmd.Flags().BoolVar(&useTUI, "tui", false, "open the modern full-screen interface")
 
 	return connCmd
 }
 
-func parseConnOptions(args []string, cfg, logPath, timeFormat string) (connOptions, error) {
+func parseConnOptions(args []string, cfg, logPath, timeFormat string, useTUI bool) (connOptions, error) {
 	opts := connOptions{
 		port:       args[0],
 		baud:       defaultConnBaud,
 		logPath:    logPath,
 		timeFormat: timeFormat,
+		tui:        useTUI,
 	}
 
 	if len(args) == 2 {
@@ -138,7 +143,20 @@ func runConn(ctx context.Context, opts connOptions) error {
 		"parity", opts.parity,
 		"stop_bits", opts.stopBits,
 	)
-	logger.Info("session.ready", "prefix", "Ctrl-A", "help", "Ctrl-A h", "quit", "Ctrl-A q")
+	if opts.tui {
+		logger.Info("session.ready", "mode", "tui", "upload", "Ctrl-U", "quit", "Ctrl-C")
+		return serialtui.Run(ctx, serialtui.Config{
+			Port:       port,
+			Input:      os.Stdin,
+			Output:     os.Stdout,
+			ReceiveLog: receiveLog,
+			TimeFormat: opts.timeFormat,
+			PortName:   opts.port,
+			Baud:       opts.baud,
+			Frame:      fmt.Sprintf("%d,%s,%s", opts.dataBits, strings.ToUpper(opts.parity[:1]), opts.stopBits),
+		})
+	}
+	logger.Info("session.ready", "mode", "raw", "prefix", "Ctrl-A", "help", "Ctrl-A h", "quit", "Ctrl-A q")
 
 	s := session.New(session.Config{
 		Port:              port,
