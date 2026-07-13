@@ -77,10 +77,10 @@ internal/cmd  ──组装──>  application/session
 日志用于记录 xserial 自身的业务事件与诊断信息，不代替设备输出或 local UI。统一格式为：
 
 ```text
-[[ xserial | INFO | session.connected ]] port="/dev/ttyUSB0" baud=115200
+[ INFO | session.connected ] port="/dev/ttyUSB0" baud=115200
 ```
 
-- 固定使用 `[[ xserial | LEVEL | event ]] key=value` 外观，使其与所连接设备输出的常规应用日志容易区分。
+- 固定使用 `[ LEVEL | event ] key=value` 外观，使其与所连接设备输出的常规应用日志容易区分。
 - `event` 使用稳定的 `domain.action` 小写命名，例如 `session.connected`、`transfer.upload_completed`；不要把自然语言句子当作 event。
 - 字段使用业务含义明确的 snake_case key。稳定信息使用独立字段，不拼接进 message。
 - 日志只写入 `stderr`，并在 raw mode 下以 `CRLF` 结束。设备字节始终只写入 `stdout`。

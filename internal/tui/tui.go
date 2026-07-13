@@ -57,6 +57,15 @@ const (
 	modeHex
 )
 
+type transferMode int
+
+const (
+	transferNone transferMode = iota
+	transferRawUpload
+	transferYMODEMUpload
+	transferYMODEMDownload
+)
+
 type endpointEventMsg struct{ event session.Event }
 type endpointClosedMsg struct{}
 type sendResultMsg struct {
@@ -72,14 +81,29 @@ type command struct {
 }
 
 var commands = []command{
-	{label: "Toggle Text / Hex mode", run: func(m *model) tea.Cmd { m.switchMode(); return nil }},
-	{label: "Upload raw file", enabled: func(m *model) bool { return !m.uploading }, run: func(m *model) tea.Cmd {
-		m.uploadMode, m.input, m.status = true, nil, "Enter a local file path"
+	{label: "Toggle Text / Hex mode", enabled: func(m *model) bool { return !m.transferring }, run: func(m *model) tea.Cmd { m.switchMode(); return nil }},
+	{label: "Upload raw file", enabled: func(m *model) bool { return !m.transferring }, run: func(m *model) tea.Cmd {
+		m.pathMode, m.input, m.status = transferRawUpload, nil, "Enter a local file path for raw upload"
+		return nil
+	}},
+	{label: "Upload with YMODEM", enabled: func(m *model) bool { return !m.transferring }, run: func(m *model) tea.Cmd {
+		m.pathMode, m.input, m.status = transferYMODEMUpload, nil, "Enter a local file path for YMODEM upload"
+		return nil
+	}},
+	{label: "Download with YMODEM", enabled: func(m *model) bool { return !m.transferring }, run: func(m *model) tea.Cmd {
+		m.input = nil
+		if err := m.endpoint.StartYMODEMDownload(context.Background(), "."); err != nil {
+			m.status = fmt.Sprintf("YMODEM download failed: %v", err)
+			return nil
+		}
+		m.transferMode, m.transferring = transferYMODEMDownload, true
+		m.status = "Waiting for YMODEM sender…"
 		return nil
 	}},
 	{label: "Clear transcript", run: func(m *model) tea.Cmd { m.clearTranscript(); return nil }},
-	{label: "Cancel upload", enabled: func(m *model) bool { return m.uploading }, run: func(m *model) tea.Cmd {
-		m.endpoint.CancelUpload()
+	{label: "Cancel transfer", enabled: func(m *model) bool { return m.transferring }, run: func(m *model) tea.Cmd {
+		m.endpoint.CancelTransfer()
+		m.status = "Canceling transfer…"
 		return nil
 	}},
 	{label: "Quit", run: func(m *model) tea.Cmd { m.endpoint.Quit(); return tea.Quit }},
@@ -98,8 +122,9 @@ type model struct {
 	currentAt    time.Time
 	mode         displayMode
 	input        []rune
-	uploadMode   bool
-	uploading    bool
+	pathMode     transferMode
+	transferMode transferMode
+	transferring bool
 	palette      bool
 	paletteIndex int
 	status       string
@@ -179,18 +204,49 @@ func (m *model) handleEvent(event session.Event) {
 		}
 		m.clampScroll()
 	case session.UploadStarted:
-		m.uploading = true
+		m.transferMode, m.transferring = transferRawUpload, true
 		m.status = fmt.Sprintf("Uploading %s…", event.Path)
 	case session.UploadProgress:
 		m.status = fmt.Sprintf("Uploading %s — %s / %s", event.Path, formatBytes(event.Written), formatBytes(event.Total))
 	case session.UploadFinished:
-		m.uploading = false
+		m.transferMode, m.transferring = transferNone, false
 		if event.Err != nil {
 			m.status = fmt.Sprintf("Upload failed: %v", event.Err)
 		} else {
 			m.txBytes += event.Bytes
 			m.status = fmt.Sprintf("Uploaded %s (%s)", event.Path, formatBytes(event.Bytes))
 		}
+		event.Acknowledge()
+	case session.YMODEMProgress:
+		m.transferring = true
+		if event.Direction == "download" {
+			m.transferMode = transferYMODEMDownload
+		} else {
+			m.transferMode = transferYMODEMUpload
+		}
+		m.status = fmt.Sprintf("YMODEM %s — %s / %s", event.Direction, formatBytes(event.Written), formatBytes(event.Total))
+	case session.YMODEMFrameRetry:
+		m.status = fmt.Sprintf("YMODEM %s retry — block %d, attempt %d: %s", event.Direction, event.Block, event.Attempt, event.Reason)
+		event.Acknowledge()
+	case session.YMODEMFinished:
+		m.transferMode, m.transferring = transferNone, false
+		stats := fmt.Sprintf(
+			"CRC32 %08x — failed %d, retried %d",
+			event.CRC32, event.FailedFrames, event.RetriedFrames,
+		)
+		if errors.Is(event.Err, context.Canceled) {
+			m.status = fmt.Sprintf("YMODEM %s canceled — %s", event.Direction, stats)
+		} else if event.Err != nil {
+			m.status = fmt.Sprintf("YMODEM %s failed: %v — %s", event.Direction, event.Err, stats)
+		} else {
+			if event.Direction == "download" {
+				m.rxBytes += event.Bytes
+			} else {
+				m.txBytes += event.Bytes
+			}
+			m.status = fmt.Sprintf("YMODEM %s complete — %s (%s) — %s", event.Direction, event.Path, formatBytes(event.Bytes), stats)
+		}
+		event.Acknowledge()
 	}
 }
 
@@ -208,10 +264,15 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.palette {
 		return m.handlePalette(key)
 	}
-	if key == "esc" && m.uploadMode {
-		m.uploadMode = false
+	if key == "esc" && m.pathMode != transferNone {
+		m.pathMode = transferNone
 		m.input = nil
-		m.status = "Upload canceled"
+		m.status = "File selection canceled"
+		return m, nil
+	}
+	if key == "esc" && m.transferring {
+		m.endpoint.CancelTransfer()
+		m.status = "Canceling transfer…"
 		return m, nil
 	}
 	switch key {
@@ -235,20 +296,20 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "backspace":
-		if len(m.input) > 0 && !m.uploading {
+		if len(m.input) > 0 && !m.transferring {
 			m.input = m.input[:len(m.input)-1]
 		}
 		return m, nil
 	case "enter":
-		if m.uploading {
+		if m.transferring {
 			return m, nil
 		}
-		if m.uploadMode {
-			return m.startUpload()
+		if m.pathMode != transferNone {
+			return m.startFileTransfer()
 		}
 		return m.sendInput()
 	}
-	if msg.Key().Text != "" && !m.uploading {
+	if msg.Key().Text != "" && !m.transferring {
 		m.input = append(m.input, []rune(msg.Key().Text)...)
 	}
 	return m, nil
@@ -341,19 +402,42 @@ func parseHexInput(input string) ([]byte, error) {
 	return data, nil
 }
 
-func (m *model) startUpload() (tea.Model, tea.Cmd) {
+func (m *model) startFileTransfer() (tea.Model, tea.Cmd) {
 	path := strings.TrimSpace(string(m.input))
 	if path == "" {
-		m.uploadMode = false
-		m.status = "Upload canceled"
+		m.pathMode = transferNone
+		m.status = "File selection canceled"
 		return m, nil
 	}
-	m.uploadMode = false
+	mode := m.pathMode
+	m.pathMode = transferNone
 	m.input = nil
-	if err := m.endpoint.StartUpload(context.Background(), path); err != nil {
-		m.status = fmt.Sprintf("Upload failed: %v", err)
+	var err error
+	if mode == transferYMODEMUpload {
+		err = m.endpoint.StartYMODEMUpload(context.Background(), path)
+	} else {
+		err = m.endpoint.StartUpload(context.Background(), path)
 	}
+	if err != nil {
+		m.status = fmt.Sprintf("Transfer failed: %v", err)
+		return m, nil
+	}
+	m.transferMode, m.transferring = mode, true
+	m.status = "Starting " + mode.label() + "…"
 	return m, nil
+}
+
+func (m transferMode) label() string {
+	switch m {
+	case transferRawUpload:
+		return "raw upload"
+	case transferYMODEMUpload:
+		return "YMODEM upload"
+	case transferYMODEMDownload:
+		return "YMODEM download"
+	default:
+		return "transfer"
+	}
 }
 
 func (m *model) appendText(data []byte, at time.Time) {
@@ -532,11 +616,11 @@ func (m *model) View() tea.View {
 	panelContent := m.renderTranscript(m.transcriptWidthFor(width), m.transcriptHeightFor(height))
 	panel := panelStyle.Width(width).Render(panelContent)
 	prompt := m.modeName() + " › "
-	if m.uploadMode {
-		prompt = "Upload › "
+	if m.pathMode != transferNone {
+		prompt = m.pathMode.label() + " › "
 	}
 	input := promptStyle.Render(prompt) + string(m.input)
-	if !m.uploading {
+	if !m.transferring {
 		input += valueStyle.Render("▏")
 	}
 	status := footerStyle.Render(m.status)

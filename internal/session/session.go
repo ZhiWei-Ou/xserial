@@ -50,15 +50,78 @@ type UploadFinished struct {
 	Path  string
 	Bytes int64
 	Err   error
+
+	acknowledged chan struct{}
 }
 
 func (UploadFinished) isSessionEvent() {}
+
+// Acknowledge lets the session log a transfer result only after the frontend
+// has closed its in-place progress line and rendered the result.
+func (e UploadFinished) Acknowledge() {
+	select {
+	case e.acknowledged <- struct{}{}:
+	default:
+	}
+}
+
+type YMODEMProgress struct {
+	Direction      string
+	Path           string
+	Written, Total int64
+}
+
+func (YMODEMProgress) isSessionEvent() {}
+
+type YMODEMFrameRetry struct {
+	Direction string
+	Path      string
+	Block     byte
+	Attempt   int
+	Reason    string
+
+	acknowledged chan struct{}
+}
+
+func (YMODEMFrameRetry) isSessionEvent() {}
+
+func (e YMODEMFrameRetry) Acknowledge() {
+	select {
+	case e.acknowledged <- struct{}{}:
+	default:
+	}
+}
+
+type YMODEMFinished struct {
+	Direction     string
+	Path          string
+	Bytes         int64
+	CRC32         uint32
+	FailedFrames  int
+	RetriedFrames int
+	Err           error
+
+	acknowledged chan struct{}
+}
+
+func (YMODEMFinished) isSessionEvent() {}
+
+// Acknowledge lets the session log a transfer result only after the frontend
+// has closed its in-place progress line and rendered the result.
+func (e YMODEMFinished) Acknowledge() {
+	select {
+	case e.acknowledged <- struct{}{}:
+	default:
+	}
+}
 
 type Endpoint interface {
 	Events() <-chan Event
 	Send(context.Context, []byte) error
 	StartUpload(context.Context, string) error
-	CancelUpload()
+	StartYMODEMUpload(context.Context, string) error
+	StartYMODEMDownload(context.Context, string) error
+	CancelTransfer()
 	Quit()
 }
 
@@ -92,11 +155,13 @@ type endpoint struct {
 	writes chan writeRequest
 	logger Logger
 
-	mu           sync.Mutex
-	stopping     bool
-	uploading    bool
-	uploadCancel context.CancelFunc
-	workers      sync.WaitGroup
+	mu                    sync.Mutex
+	stopping              bool
+	transferActive        bool
+	transferConsumesInput bool
+	transferCancel        context.CancelFunc
+	transferInput         chan []byte
+	workers               sync.WaitGroup
 }
 
 func (e *endpoint) Events() <-chan Event { return e.events }
@@ -107,7 +172,7 @@ func (e *endpoint) Send(ctx context.Context, data []byte) error {
 	if e.stopping {
 		return context.Canceled
 	}
-	if e.uploading {
+	if e.transferActive {
 		return ErrTransferActive
 	}
 	return e.write(ctx, data)
@@ -133,6 +198,24 @@ func (e *endpoint) write(ctx context.Context, data []byte) error {
 }
 
 func (e *endpoint) StartUpload(ctx context.Context, path string) error {
+	return e.startTransfer(ctx, false, func(transferCtx context.Context) {
+		e.runUpload(transferCtx, path)
+	})
+}
+
+func (e *endpoint) StartYMODEMUpload(ctx context.Context, path string) error {
+	return e.startTransfer(ctx, true, func(transferCtx context.Context) {
+		e.runYMODEMUpload(transferCtx, path)
+	})
+}
+
+func (e *endpoint) StartYMODEMDownload(ctx context.Context, dir string) error {
+	return e.startTransfer(ctx, true, func(transferCtx context.Context) {
+		e.runYMODEMDownload(transferCtx, dir)
+	})
+}
+
+func (e *endpoint) startTransfer(ctx context.Context, consumesInput bool, run func(context.Context)) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -141,22 +224,28 @@ func (e *endpoint) StartUpload(ctx context.Context, path string) error {
 		e.mu.Unlock()
 		return context.Canceled
 	}
-	if e.uploading {
+	if e.transferActive {
 		e.mu.Unlock()
 		return ErrTransferActive
 	}
-	uploadCtx, cancel := context.WithCancel(e.ctx)
-	e.uploading = true
-	e.uploadCancel = cancel
+	transferCtx, cancel := context.WithCancel(e.ctx)
+	e.transferActive = true
+	e.transferConsumesInput = consumesInput
+	e.transferCancel = cancel
+	if consumesInput {
+		e.transferInput = make(chan []byte, 32)
+	}
 	e.workers.Add(1)
 	e.mu.Unlock()
 
-	go e.runUpload(uploadCtx, path)
+	go func() {
+		defer e.workers.Done()
+		run(transferCtx)
+	}()
 	return nil
 }
 
 func (e *endpoint) runUpload(ctx context.Context, path string) {
-	defer e.workers.Done()
 	e.emit(UploadStarted{Path: path})
 
 	lastProgress := time.Time{}
@@ -172,17 +261,107 @@ func (e *endpoint) runUpload(ctx context.Context, path string) {
 		err = context.Canceled
 	}
 
-	e.mu.Lock()
-	e.uploading = false
-	e.uploadCancel = nil
-	e.mu.Unlock()
+	e.finishTransfer()
 
-	e.emit(UploadFinished{Path: path, Bytes: n, Err: err})
+	finished := UploadFinished{Path: path, Bytes: n, Err: err, acknowledged: make(chan struct{}, 1)}
+	if e.emit(finished) {
+		e.waitForAcknowledgement(ctx, finished.acknowledged)
+	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		e.logWarn("transfer.upload_failed", "path", path, "bytes", n, "error", err)
 	} else if err == nil {
 		e.logInfo("transfer.upload_completed", "path", path, "bytes", n)
 	}
+}
+
+func (e *endpoint) runYMODEMUpload(ctx context.Context, path string) {
+	stream := &transferStream{ctx: ctx, endpoint: e, input: e.transferInput}
+	stats, err := transfer.SendYMODEMFile(ctx, path, stream, func(written, total int64) {
+		e.emit(YMODEMProgress{Direction: "upload", Path: path, Written: written, Total: total})
+	}, func(retry transfer.YMODEMRetry) {
+		e.reportYMODEMRetry(ctx, "upload", path, retry)
+	})
+	e.finishTransfer()
+	finished := newYMODEMFinished("upload", path, stats, err)
+	if e.emit(finished) {
+		e.waitForAcknowledgement(ctx, finished.acknowledged)
+	}
+	e.logYMODEMResult("upload", path, stats, err)
+}
+
+func (e *endpoint) runYMODEMDownload(ctx context.Context, dir string) {
+	stream := &transferStream{ctx: ctx, endpoint: e, input: e.transferInput}
+	path, stats, err := transfer.ReceiveYMODEMFile(ctx, dir, stream, func(written, total int64) {
+		e.emit(YMODEMProgress{Direction: "download", Written: written, Total: total})
+	}, func(retry transfer.YMODEMRetry) {
+		e.reportYMODEMRetry(ctx, "download", retry.Path, retry)
+	})
+	e.finishTransfer()
+	finished := newYMODEMFinished("download", path, stats, err)
+	if e.emit(finished) {
+		e.waitForAcknowledgement(ctx, finished.acknowledged)
+	}
+	e.logYMODEMResult("download", path, stats, err)
+}
+
+func newYMODEMFinished(direction, path string, stats transfer.YMODEMStats, err error) YMODEMFinished {
+	return YMODEMFinished{
+		Direction: direction, Path: path, Bytes: stats.Bytes, CRC32: stats.CRC32,
+		FailedFrames: stats.FailedFrames, RetriedFrames: stats.RetriedFrames,
+		Err: err, acknowledged: make(chan struct{}, 1),
+	}
+}
+
+func (e *endpoint) reportYMODEMRetry(ctx context.Context, direction, path string, retry transfer.YMODEMRetry) {
+	event := YMODEMFrameRetry{
+		Direction: direction, Path: path, Block: retry.Block,
+		Attempt: retry.Attempt, Reason: retry.Reason,
+		acknowledged: make(chan struct{}, 1),
+	}
+	if e.emit(event) {
+		e.waitForAcknowledgement(ctx, event.acknowledged)
+	}
+	e.logWarn(
+		"transfer.ymodem_frame_retry",
+		"direction", direction,
+		"path", path,
+		"block", retry.Block,
+		"attempt", retry.Attempt,
+		"reason", retry.Reason,
+	)
+}
+
+func (e *endpoint) logYMODEMResult(direction, path string, stats transfer.YMODEMStats, err error) {
+	values := []any{
+		"direction", direction,
+		"path", path,
+		"bytes", stats.Bytes,
+		"crc32", fmt.Sprintf("%08x", stats.CRC32),
+		"failed_frames", stats.FailedFrames,
+		"retried_frames", stats.RetriedFrames,
+	}
+	if err != nil && !errors.Is(err, context.Canceled) {
+		e.logWarn("transfer.ymodem_failed", append(values, "error", err)...)
+	} else if err == nil {
+		e.logInfo("transfer.ymodem_completed", values...)
+	}
+}
+
+func (e *endpoint) waitForAcknowledgement(ctx context.Context, acknowledged <-chan struct{}) {
+	select {
+	case <-acknowledged:
+	case <-ctx.Done():
+	case <-e.ctx.Done():
+	}
+}
+
+func (e *endpoint) finishTransfer() {
+	e.mu.Lock()
+	e.transferActive = false
+	e.transferConsumesInput = false
+	e.transferCancel = nil
+	e.transferInput = nil
+	e.mu.Unlock()
 }
 
 type writerFunc func(context.Context, []byte) error
@@ -194,9 +373,39 @@ func (f writerFunc) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
-func (e *endpoint) CancelUpload() {
+type transferStream struct {
+	ctx      context.Context
+	endpoint *endpoint
+	input    <-chan []byte
+	pending  []byte
+}
+
+func (s *transferStream) Read(data []byte) (int, error) {
+	for len(s.pending) == 0 {
+		select {
+		case chunk := <-s.input:
+			s.pending = chunk
+		case <-s.ctx.Done():
+			return 0, context.Canceled
+		case <-s.endpoint.ctx.Done():
+			return 0, context.Canceled
+		}
+	}
+	n := copy(data, s.pending)
+	s.pending = s.pending[n:]
+	return n, nil
+}
+
+func (s *transferStream) Write(data []byte) (int, error) {
+	if err := s.endpoint.write(s.ctx, data); err != nil {
+		return 0, err
+	}
+	return len(data), nil
+}
+
+func (e *endpoint) CancelTransfer() {
 	e.mu.Lock()
-	cancel := e.uploadCancel
+	cancel := e.transferCancel
 	e.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -217,7 +426,7 @@ func (e *endpoint) emit(event Event) bool {
 func (e *endpoint) stop() {
 	e.mu.Lock()
 	e.stopping = true
-	cancel := e.uploadCancel
+	cancel := e.transferCancel
 	e.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -338,7 +547,7 @@ func (s *Session) runReader(ctx context.Context, e *endpoint) error {
 					return fmt.Errorf("record received data: %w", writeErr)
 				}
 			}
-			if !e.emit(Received{Data: data, At: time.Now()}) {
+			if !e.deliverReceived(ctx, data) {
 				return context.Canceled
 			}
 		}
@@ -351,6 +560,22 @@ func (s *Session) runReader(ctx context.Context, e *endpoint) error {
 		default:
 		}
 	}
+}
+
+func (e *endpoint) deliverReceived(ctx context.Context, data []byte) bool {
+	e.mu.Lock()
+	consumesInput := e.transferConsumesInput
+	input := e.transferInput
+	e.mu.Unlock()
+	if consumesInput {
+		select {
+		case input <- data:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	return e.emit(Received{Data: data, At: time.Now()})
 }
 
 func normalizeRunError(err error) error {

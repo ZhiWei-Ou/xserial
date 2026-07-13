@@ -44,7 +44,7 @@ flowchart TB
     end
 
     Session[internal/session<br/>共享会话内核]
-    Transfer[internal/transfer<br/>raw upload、短写处理]
+    Transfer[internal/transfer<br/>raw upload、YMODEM、短写处理]
     Serial[internal/serialport<br/>端口枚举、配置与打开]
     Logging[internal/logging<br/>结构化业务日志]
 
@@ -104,7 +104,7 @@ type Endpoint interface {
     Events() <-chan Event
     Send(context.Context, []byte) error
     StartUpload(context.Context, string) error
-    CancelUpload()
+    CancelTransfer()
     Quit()
 }
 ```
@@ -118,7 +118,7 @@ flowchart LR
     Upload[Upload worker]
 
     Frontend -->|Send| Endpoint
-    Frontend -->|StartUpload / CancelUpload| Endpoint
+    Frontend -->|Start transfer / CancelTransfer| Endpoint
     Frontend -->|Quit| Endpoint
     Endpoint -->|写请求 + 完成确认| Writer
     Endpoint --> Upload
@@ -190,6 +190,14 @@ writer 是会话内唯一直接调用 `SerialPort.Write` 的 goroutine。每个�
 ### Raw upload
 
 上传 worker 验证普通文件、打开文件并以 256 字节分块读取。它响应 context 取消并通过统一 writer 写串口。raw upload 只保证字节透传，不提供协议级校验、重传或断点续传。
+
+### YMODEM
+
+YMODEM 作为独立 transfer 实现支持单文件上传和下载。传输期间会话 reader 仍是串口的唯一读取者，但会把收到的协议字节交给 YMODEM worker；所有协议写入继续经过统一 writer。下载使用发送端元数据中的 basename 保存到当前目录，并以独占创建方式拒绝覆盖已有文件。
+
+transfer 在流式读写文件内容时同步计算 CRC32，并统计被拒绝或校验失败的帧与实际重传次数。重传通过事件交给 session 记录，最终统计随完成事件交给前端显示。
+
+raw frontend 以单行进度和本地结果展示这些事件；TUI 通过命令面板启动 YMODEM 上传或下载，并在状态栏展示进度、重传和最终统计。TUI 会话不向 alternate screen 外的 stderr 写后台 session 日志，避免破坏全屏渲染。
 
 ## 6. 两种前端
 
@@ -276,7 +284,7 @@ flowchart LR
 业务日志格式固定为：
 
 ```text
-[[ xserial | INFO | session.connected ]] port="/dev/ttyUSB0" baud=115200
+[ INFO | session.connected ] port="/dev/ttyUSB0" baud=115200
 ```
 
 adapter 不自行记录错误；错误在掌握业务语义的命令层或 session 层记录一次，避免重复日志。
@@ -343,4 +351,3 @@ flowchart LR
 - flags、配置文件和 completion 属于命令层。
 
 只有真实出现第二个实现，或测试需要替换外部副作用时，才在调用方一侧增加小 interface。前端与后端之间继续通过 `Frontend`、`Endpoint` 和稳定事件交互，不把具体 UI 或第三方串口类型带入 session。
-

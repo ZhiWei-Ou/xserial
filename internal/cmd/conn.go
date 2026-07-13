@@ -145,8 +145,12 @@ func runConn(ctx context.Context, opts connOptions) error {
 		"stop_bits", opts.stopBits,
 	)
 	var frontend session.Frontend
+	var sessionLogger session.Logger = logger
 	if opts.tui {
-		logger.Info("session.ready", "mode", "tui", "commands", "Ctrl-P", "quit", "Ctrl-C")
+		logger.Info("session.ready", "help", "Ctrl-P", "quit", "Ctrl-C")
+		// The TUI renders transfer status itself; background stderr writes would
+		// corrupt Bubble Tea's alternate-screen output.
+		sessionLogger = nil
 		frontend = serialtui.New(serialtui.Config{
 			Input:      os.Stdin,
 			Output:     os.Stdout,
@@ -156,7 +160,7 @@ func runConn(ctx context.Context, opts connOptions) error {
 			Frame:      fmt.Sprintf("%d,%s,%s", opts.dataBits, strings.ToUpper(opts.parity[:1]), opts.stopBits),
 		})
 	} else {
-		logger.Info("session.ready", "mode", "raw", "prefix", "Ctrl-P", "help", "Ctrl-P h", "quit", "Ctrl-P q")
+		logger.Info("session.ready", "help", "Ctrl-P h", "quit", "Ctrl-P q")
 		frontend = rawui.New(rawui.Config{
 			Terminal: rawui.NewOSTerminal(os.Stdin),
 			Input:    os.Stdin,
@@ -170,7 +174,7 @@ func runConn(ctx context.Context, opts connOptions) error {
 		Frontend:          frontend,
 		ReceiveLog:        receiveLog,
 		ReceiveTimeFormat: opts.timeFormat,
-		Logger:            logger,
+		Logger:            sessionLogger,
 	})
 	return s.Run(ctx)
 }

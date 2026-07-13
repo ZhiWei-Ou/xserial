@@ -5,9 +5,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/ZhiWei-Ou/xserial/internal/transfer"
 )
 
 type fakePort struct {
@@ -162,6 +166,108 @@ func TestUploadExcludesNormalWritesAndFinishesBeforeRunReturns(t *testing.T) {
 	if port.concurrentWrite {
 		t.Fatal("serial port observed concurrent writes")
 	}
+}
+
+func TestSessionLogsTransferResultAfterFrontendAcknowledgesCompletion(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "firmware.bin")
+	if err := os.WriteFile(file, []byte("firmware"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logger := &orderedLogger{events: make(chan string, 1)}
+	frontend := frontendFunc(func(ctx context.Context, endpoint Endpoint) error {
+		if err := endpoint.StartUpload(ctx, file); err != nil {
+			return err
+		}
+		for event := range endpoint.Events() {
+			finished, ok := event.(UploadFinished)
+			if !ok {
+				continue
+			}
+			select {
+			case logged := <-logger.events:
+				return errors.New("transfer result logged before frontend rendered completion: " + logged)
+			default:
+			}
+			finished.Acknowledge()
+			if logged := <-logger.events; logged != "transfer.upload_completed" {
+				return errors.New("unexpected log event: " + logged)
+			}
+			endpoint.Quit()
+			return nil
+		}
+		return nil
+	})
+
+	if err := New(Config{Port: newBlockingPort(), Frontend: frontend, Logger: logger}).Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
+type orderedLogger struct {
+	events chan string
+}
+
+func (l *orderedLogger) Info(event string, _ ...any) { l.events <- event }
+func (l *orderedLogger) Warn(event string, _ ...any) { l.events <- event }
+
+func TestSessionRunsYMODEMUploadThroughSharedSerialReaderAndWriter(t *testing.T) {
+	sourceDir := t.TempDir()
+	destinationDir := t.TempDir()
+	source := filepath.Join(sourceDir, "firmware.bin")
+	want := bytes.Repeat([]byte("firmware-"), 200)
+	if err := os.WriteFile(source, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionConn, devicePort := net.Pipe()
+	sessionPort := ymodemTestPort{Conn: sessionConn}
+	defer devicePort.Close()
+	receiveErr := make(chan error, 1)
+	go func() {
+		_, _, err := transfer.ReceiveYMODEMFile(context.Background(), destinationDir, devicePort, nil, nil)
+		receiveErr <- err
+	}()
+	frontend := frontendFunc(func(ctx context.Context, endpoint Endpoint) error {
+		if err := endpoint.StartYMODEMUpload(ctx, source); err != nil {
+			return err
+		}
+		for event := range endpoint.Events() {
+			if event, ok := event.(YMODEMFinished); ok {
+				if event.Err != nil {
+					return event.Err
+				}
+				endpoint.Quit()
+				return nil
+			}
+		}
+		return nil
+	})
+
+	if err := New(Config{Port: sessionPort, Frontend: frontend}).Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if err := <-receiveErr; err != nil {
+		t.Fatalf("device receive error = %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(destinationDir, "firmware.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("device received bytes do not match source")
+	}
+}
+
+type ymodemTestPort struct {
+	net.Conn
+}
+
+func (p ymodemTestPort) Read(data []byte) (int, error) {
+	n, err := p.Conn.Read(data)
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+		err = io.EOF
+	}
+	return n, err
 }
 
 type gatedPort struct {

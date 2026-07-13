@@ -15,12 +15,14 @@ import (
 )
 
 type fakeEndpoint struct {
-	events   chan session.Event
-	sent     [][]byte
-	upload   string
-	canceled bool
-	quit     bool
-	err      error
+	events         chan session.Event
+	sent           [][]byte
+	upload         string
+	ymodemUpload   string
+	ymodemDownload string
+	canceled       bool
+	quit           bool
+	err            error
 }
 
 func newFakeEndpoint() *fakeEndpoint                 { return &fakeEndpoint{events: make(chan session.Event, 8)} }
@@ -33,8 +35,16 @@ func (e *fakeEndpoint) StartUpload(_ context.Context, path string) error {
 	e.upload = path
 	return e.err
 }
-func (e *fakeEndpoint) CancelUpload() { e.canceled = true }
-func (e *fakeEndpoint) Quit()         { e.quit = true }
+func (e *fakeEndpoint) StartYMODEMUpload(_ context.Context, path string) error {
+	e.ymodemUpload = path
+	return e.err
+}
+func (e *fakeEndpoint) StartYMODEMDownload(_ context.Context, dir string) error {
+	e.ymodemDownload = dir
+	return e.err
+}
+func (e *fakeEndpoint) CancelTransfer() { e.canceled = true }
+func (e *fakeEndpoint) Quit()           { e.quit = true }
 
 func TestTextModeSendsLineAndHexModeSendsExactBytes(t *testing.T) {
 	endpoint := newFakeEndpoint()
@@ -116,8 +126,60 @@ func TestCommandPaletteInvokesRegisteredActions(t *testing.T) {
 	}
 	m.paletteIndex = 1
 	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	if !m.uploadMode {
+	if m.pathMode != transferRawUpload {
 		t.Fatal("upload command did not enter path mode")
+	}
+}
+
+func TestCommandPaletteStartsYMODEMUploadAndDownload(t *testing.T) {
+	endpoint := newFakeEndpoint()
+	m := newModel(endpoint, Config{})
+
+	commands[2].run(m)
+	enterText(t, m, "firmware.bin")
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if endpoint.ymodemUpload != "firmware.bin" || !m.transferring || m.transferMode != transferYMODEMUpload {
+		t.Fatalf("upload=%q transferring=%v mode=%v", endpoint.ymodemUpload, m.transferring, m.transferMode)
+	}
+
+	m.transferring, m.transferMode = false, transferNone
+	commands[3].run(m)
+	if endpoint.ymodemDownload != "." || !m.transferring || m.transferMode != transferYMODEMDownload {
+		t.Fatalf("download=%q transferring=%v mode=%v", endpoint.ymodemDownload, m.transferring, m.transferMode)
+	}
+}
+
+func TestTUIShowsYMODEMRetryAndCompletionStats(t *testing.T) {
+	m := newModel(newFakeEndpoint(), Config{})
+	m.handleEvent(session.YMODEMFrameRetry{Direction: "upload", Block: 3, Attempt: 2, Reason: "NAK"})
+	for _, want := range []string{"block 3", "attempt 2", "NAK"} {
+		if !strings.Contains(m.status, want) {
+			t.Fatalf("retry status %q does not contain %q", m.status, want)
+		}
+	}
+
+	m.handleEvent(session.YMODEMFinished{
+		Direction: "download", Path: "firmware.bin", Bytes: 2048, CRC32: 0x1234abcd,
+		FailedFrames: 1, RetriedFrames: 1,
+	})
+	for _, want := range []string{"firmware.bin", "CRC32 1234abcd", "failed 1", "retried 1"} {
+		if !strings.Contains(m.status, want) {
+			t.Fatalf("completion status %q does not contain %q", m.status, want)
+		}
+	}
+	if m.rxBytes != 2048 || m.transferring {
+		t.Fatalf("rx=%d transferring=%v", m.rxBytes, m.transferring)
+	}
+}
+
+func TestTUIEscCancelsYMODEMTransfer(t *testing.T) {
+	endpoint := newFakeEndpoint()
+	m := newModel(endpoint, Config{})
+	m.transferring, m.transferMode = true, transferYMODEMUpload
+
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	if !endpoint.canceled || !strings.Contains(m.status, "Canceling") {
+		t.Fatalf("canceled=%v status=%q", endpoint.canceled, m.status)
 	}
 }
 
