@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -19,6 +20,28 @@ func TestConnWithoutPortPrintsHelp(t *testing.T) {
 	}
 	if got := output.String(); !strings.Contains(got, "Usage:") || !strings.Contains(got, "conn <port> [baud]") {
 		t.Fatalf("Execute() output = %q, want conn usage", got)
+	}
+}
+
+func TestConnShowsOnlyCurrentPlatformExamples(t *testing.T) {
+	cmd := NewConnCommand()
+
+	examples := map[string]string{
+		"linux":   "/dev/ttyUSB0",
+		"darwin":  "/dev/tty.usbserial-0001",
+		"windows": "COM3",
+	}
+	want, supported := examples[runtime.GOOS]
+	if !supported {
+		want = "<port>"
+	}
+	if !strings.Contains(cmd.Example, "xserial conn "+want) {
+		t.Fatalf("Example = %q, want port %q", cmd.Example, want)
+	}
+	for platform, port := range examples {
+		if platform != runtime.GOOS && strings.Contains(cmd.Example, port) {
+			t.Fatalf("Example = %q, unexpectedly contains %s port %q", cmd.Example, platform, port)
+		}
 	}
 }
 

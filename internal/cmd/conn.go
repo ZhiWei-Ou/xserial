@@ -40,7 +40,7 @@ func NewConnCommand() *cobra.Command {
 	connCmd := &cobra.Command{
 		Use:     "conn <port> [baud]",
 		Short:   "Connect to a serial port",
-		Example: "  xserial conn /dev/tty.usbserial\n  xserial conn /dev/tty.usbserial 9600 -c 8,N,1",
+		Example: connExamples,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				_ = cmd.Help()
