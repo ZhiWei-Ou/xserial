@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ZhiWei-Ou/xserial/internal/logging"
 	"github.com/ZhiWei-Ou/xserial/internal/rawui"
@@ -117,12 +118,16 @@ func parseConnOptions(args []string, cfg, logPath, timeFormat string, useTUI boo
 
 func runConn(ctx context.Context, opts connOptions) error {
 	logger := logging.New(os.Stderr)
-	port, err := serialport.Open(opts.port, serialport.Config{
+	serialConfig := serialport.Config{
 		BaudRate: opts.baud,
 		DataBits: opts.dataBits,
 		Parity:   opts.parity,
 		StopBits: opts.stopBits,
-	})
+	}
+	openPort := func() (session.SerialPort, error) {
+		return serialport.Open(opts.port, serialConfig)
+	}
+	port, err := openPort()
 	if err != nil {
 		return fmt.Errorf("open serial port %q: %w", opts.port, err)
 	}
@@ -171,6 +176,8 @@ func runConn(ctx context.Context, opts connOptions) error {
 
 	s := session.New(session.Config{
 		Port:              port,
+		Reconnect:         openPort,
+		ReconnectInterval: time.Second,
 		Frontend:          frontend,
 		ReceiveLog:        receiveLog,
 		ReceiveTimeFormat: opts.timeFormat,

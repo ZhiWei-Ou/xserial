@@ -171,7 +171,12 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleEvent(msg.event)
 		return m, waitEvent(m.endpoint.Events())
 	case sendResultMsg:
-		if msg.err != nil {
+		if errors.Is(msg.err, session.ErrDisconnected) {
+			if len(m.input) == 0 {
+				m.input = append([]rune(nil), msg.input...)
+			}
+			m.status = "Serial port disconnected; waiting to reconnect"
+		} else if msg.err != nil {
 			if len(m.input) == 0 {
 				m.input = append([]rune(nil), msg.input...)
 			}
@@ -188,6 +193,10 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) handleEvent(event session.Event) {
 	switch event := event.(type) {
+	case session.Disconnected:
+		m.status = fmt.Sprintf("Serial port disconnected: %v — retrying…", event.Err)
+	case session.Reconnected:
+		m.status = "Serial port reconnected"
 	case session.Received:
 		atBottom := m.scroll == 0
 		before := len(m.visualLines(m.transcriptWidth()))

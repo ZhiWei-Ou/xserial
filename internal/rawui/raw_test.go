@@ -44,12 +44,16 @@ type fakeEndpoint struct {
 	activeTransfer string
 	autoFinish     bool
 	canceled       int
+	sendErr        error
 }
 
 func (e *fakeEndpoint) Events() <-chan session.Event { return e.events }
 func (e *fakeEndpoint) Send(_ context.Context, data []byte) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.sendErr != nil {
+		return e.sendErr
+	}
 	_, _ = e.sent.Write(data)
 	return nil
 }
@@ -114,6 +118,29 @@ func TestRawFrontendUsesCtrlPAndRestoresTerminal(t *testing.T) {
 	}
 	if !bytes.Contains(local.Bytes(), []byte("Ctrl-P h")) {
 		t.Fatalf("help = %q", local.String())
+	}
+}
+
+func TestRawFrontendCanQuitWhileSerialPortIsDisconnected(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	endpoint := &fakeEndpoint{
+		events:  make(chan session.Event),
+		cancel:  cancel,
+		sendErr: session.ErrDisconnected,
+	}
+	terminal := &fakeTerminal{}
+	frontend := New(Config{
+		Terminal: terminal,
+		Input:    bytes.NewReader([]byte{'x', DefaultPrefixKey, 'q'}),
+		Output:   &bytes.Buffer{},
+		Local:    &bytes.Buffer{},
+	})
+
+	if err := frontend.Run(ctx, endpoint); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !terminal.restored {
+		t.Fatal("terminal was not restored")
 	}
 }
 

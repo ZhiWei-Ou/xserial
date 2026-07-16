@@ -269,13 +269,13 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 			case inputNormal:
 				if result.b == f.cfg.PrefixKey {
 					state = inputAfterPrefix
-				} else if err := endpoint.Send(ctx, []byte{result.b}); err != nil {
+				} else if err := endpoint.Send(ctx, []byte{result.b}); err != nil && !errors.Is(err, session.ErrDisconnected) {
 					return err
 				}
 			case inputAfterPrefix:
 				state = inputNormal
 				if result.b == f.cfg.PrefixKey {
-					if err := endpoint.Send(ctx, []byte{f.cfg.PrefixKey}); err != nil {
+					if err := endpoint.Send(ctx, []byte{f.cfg.PrefixKey}); err != nil && !errors.Is(err, session.ErrDisconnected) {
 						return err
 					}
 				} else if command, ok := findLocalCommand(result.b); ok {
@@ -308,7 +308,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 						return nil
 					}
 				} else {
-					if err := endpoint.Send(ctx, []byte{f.cfg.PrefixKey, result.b}); err != nil {
+					if err := endpoint.Send(ctx, []byte{f.cfg.PrefixKey, result.b}); err != nil && !errors.Is(err, session.ErrDisconnected) {
 						return err
 					}
 				}

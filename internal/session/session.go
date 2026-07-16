@@ -11,7 +11,10 @@ import (
 	"github.com/ZhiWei-Ou/xserial/internal/transfer"
 )
 
-var ErrTransferActive = errors.New("transfer is active")
+var (
+	ErrDisconnected   = errors.New("serial port is disconnected")
+	ErrTransferActive = errors.New("transfer is active")
+)
 
 type SerialPort interface {
 	io.ReadWriteCloser
@@ -32,6 +35,16 @@ type Received struct {
 }
 
 func (Received) isSessionEvent() {}
+
+type Disconnected struct {
+	Err error
+}
+
+func (Disconnected) isSessionEvent() {}
+
+type Reconnected struct{}
+
+func (Reconnected) isSessionEvent() {}
 
 type UploadStarted struct {
 	Path string
@@ -131,6 +144,8 @@ type Frontend interface {
 
 type Config struct {
 	Port              SerialPort
+	Reconnect         func() (SerialPort, error)
+	ReconnectInterval time.Duration
 	Frontend          Frontend
 	ReceiveLog        io.Writer
 	ReceiveTimeFormat string
@@ -162,6 +177,9 @@ type endpoint struct {
 	transferCancel        context.CancelFunc
 	transferInput         chan []byte
 	workers               sync.WaitGroup
+	portMu                sync.RWMutex
+	port                  SerialPort
+	portGeneration        uint64
 }
 
 func (e *endpoint) Events() <-chan Event { return e.events }
@@ -414,6 +432,19 @@ func (e *endpoint) CancelTransfer() {
 
 func (e *endpoint) Quit() { e.cancel() }
 
+func (e *endpoint) connection() (SerialPort, uint64) {
+	e.portMu.RLock()
+	defer e.portMu.RUnlock()
+	return e.port, e.portGeneration
+}
+
+func (e *endpoint) setConnection(port SerialPort, generation uint64) {
+	e.portMu.Lock()
+	e.port = port
+	e.portGeneration = generation
+	e.portMu.Unlock()
+}
+
 func (e *endpoint) emit(event Event) bool {
 	select {
 	case e.events <- event:
@@ -458,29 +489,24 @@ func (s *Session) Run(parent context.Context) error {
 		ctx: ctx, cancel: cancel, events: make(chan Event, 32),
 		writes: make(chan writeRequest), logger: s.cfg.Logger,
 	}
+	e.setConnection(s.cfg.Port, 1)
 
-	results := make(chan error, 2)
-	var backend sync.WaitGroup
-	backend.Add(2)
-	go func() {
-		defer backend.Done()
-		results <- s.runWriter(ctx, e.writes)
-	}()
-	go func() {
-		defer backend.Done()
-		results <- s.runReader(ctx, e)
-	}()
+	failures := make(chan connectionFailure, 2)
+	writerDone := make(chan error, 1)
+	go func() { writerDone <- s.runWriter(ctx, e, failures) }()
+	connectionDone := make(chan error, 1)
+	go func() { connectionDone <- s.runConnections(ctx, e, failures) }()
 
 	frontendDone := make(chan error, 1)
 	go func() { frontendDone <- s.cfg.Frontend.Run(ctx, e) }()
 
 	var runErr error
-	backendResults := 0
+	connectionReturned := false
 	frontendReturned := false
 	select {
-	case err := <-results:
+	case err := <-connectionDone:
 		runErr = normalizeRunError(err)
-		backendResults++
+		connectionReturned = true
 	case err := <-frontendDone:
 		runErr = normalizeRunError(err)
 		frontendReturned = true
@@ -490,46 +516,53 @@ func (s *Session) Run(parent context.Context) error {
 
 	cancel()
 	e.stop()
-	closeErr := s.cfg.Port.Close()
-	backend.Wait()
+	if !connectionReturned {
+		if err := <-connectionDone; runErr == nil {
+			runErr = normalizeRunError(err)
+		}
+	}
+	if err := <-writerDone; runErr == nil {
+		runErr = normalizeRunError(err)
+	}
 	e.workers.Wait()
 	close(e.events)
 
-	for backendResults < 2 {
-		err := <-results
-		if runErr == nil {
-			runErr = normalizeRunError(err)
-		}
-		backendResults++
-	}
 	if !frontendReturned {
 		err := <-frontendDone
 		if runErr == nil {
 			runErr = normalizeRunError(err)
 		}
 	}
-	if closeErr != nil {
-		runErr = errors.Join(runErr, fmt.Errorf("close serial port: %w", closeErr))
-	}
 	return runErr
 }
 
-func (s *Session) runWriter(ctx context.Context, requests <-chan writeRequest) error {
+func (s *Session) runWriter(ctx context.Context, e *endpoint, failures chan<- connectionFailure) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return context.Canceled
-		case req := <-requests:
-			err := transfer.WriteFull(s.cfg.Port, req.data)
-			req.done <- err
-			if err != nil {
-				return fmt.Errorf("write serial port: %w", err)
+		case req := <-e.writes:
+			port, generation := e.connection()
+			if port == nil {
+				req.done <- ErrDisconnected
+				continue
 			}
+			err := transfer.WriteFull(port, req.data)
+			if err != nil {
+				req.done <- fmt.Errorf("%w: %v", ErrDisconnected, err)
+				select {
+				case failures <- connectionFailure{generation: generation, err: fmt.Errorf("write serial port: %w", err)}:
+				case <-ctx.Done():
+					return context.Canceled
+				}
+				continue
+			}
+			req.done <- nil
 		}
 	}
 }
 
-func (s *Session) runReader(ctx context.Context, e *endpoint) error {
+func (s *Session) runReader(ctx context.Context, e *endpoint, port SerialPort) error {
 	var recorder io.Writer
 	if s.cfg.ReceiveLog != nil {
 		recorder = s.cfg.ReceiveLog
@@ -539,7 +572,7 @@ func (s *Session) runReader(ctx context.Context, e *endpoint) error {
 	}
 	buf := make([]byte, 4096)
 	for {
-		n, err := s.cfg.Port.Read(buf)
+		n, err := port.Read(buf)
 		if n > 0 {
 			data := append([]byte(nil), buf[:n]...)
 			if recorder != nil {

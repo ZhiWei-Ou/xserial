@@ -67,6 +67,19 @@ func TestTextModeSendsLineAndHexModeSendsExactBytes(t *testing.T) {
 	}
 }
 
+func TestConnectionEventsUpdateStatus(t *testing.T) {
+	m := newModel(newFakeEndpoint(), Config{})
+	m.handleEvent(session.Disconnected{Err: errors.New("device unplugged")})
+	if !strings.Contains(m.status, "device unplugged") || !strings.Contains(m.status, "retrying") {
+		t.Fatalf("disconnected status = %q", m.status)
+	}
+
+	m.handleEvent(session.Reconnected{})
+	if m.status != "Serial port reconnected" {
+		t.Fatalf("reconnected status = %q", m.status)
+	}
+}
+
 func TestHexInputRequiresTwoDigitGroups(t *testing.T) {
 	for _, input := range []string{"A", "0xAA", "AABB", "GG"} {
 		t.Run(input, func(t *testing.T) {
