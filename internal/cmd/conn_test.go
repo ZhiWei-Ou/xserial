@@ -28,7 +28,7 @@ func TestConnShowsOnlyCurrentPlatformExamples(t *testing.T) {
 
 	examples := map[string]string{
 		"linux":   "/dev/ttyUSB0",
-		"darwin":  "/dev/tty.usbserial-0001",
+		"darwin":  "/dev/cu.usbserial-0001",
 		"windows": "COM3",
 	}
 	want, supported := examples[runtime.GOOS]

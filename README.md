@@ -43,10 +43,19 @@ xserial list
 xserial conn /dev/ttyUSB0
 ```
 
+端口名符合当前平台的串口命名规则时，可以省略 `conn`：
+
+```bash
+xserial /dev/ttyUSB0
+xserial /dev/ttyUSB0 9600 --tui
+```
+
+无法识别为串口名的参数仍按子命令处理，因此子命令拼写错误不会被当成设备名。
+
 macOS 上的端口通常类似：
 
 ```bash
-xserial conn /dev/tty.usbserial-0001
+xserial conn /dev/cu.usbserial-0001
 ```
 
 Windows 可以直接使用 COM 端口：

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime/debug"
 
 	"github.com/spf13/cobra"
@@ -25,6 +26,7 @@ func NewRootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:           "xserial",
 		Short:         "Cross-platform serial terminal",
+		Example:       directConnExamples,
 		Version:       version,
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -40,11 +42,24 @@ func NewRootCommand() *cobra.Command {
 }
 
 func Execute() error {
-	return NewRootCommand().Execute()
+	rootCmd := NewRootCommand()
+	rootCmd.SetArgs(resolveRootArgs(os.Args[1:]))
+	return rootCmd.Execute()
 }
 
 func ExecuteContext(ctx context.Context) error {
-	return NewRootCommand().ExecuteContext(ctx)
+	rootCmd := NewRootCommand()
+	rootCmd.SetArgs(resolveRootArgs(os.Args[1:]))
+	return rootCmd.ExecuteContext(ctx)
+}
+
+func resolveRootArgs(args []string) []string {
+	if len(args) == 0 || !isSerialPortName(args[0]) {
+		return args
+	}
+	resolved := make([]string, 0, len(args)+1)
+	resolved = append(resolved, "conn")
+	return append(resolved, args...)
 }
 
 func currentVersion() string {
