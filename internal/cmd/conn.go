@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -30,50 +29,26 @@ type connOptions struct {
 	reconnectAttempts int
 }
 
+type connFlags struct {
+	cfg               string
+	logPath           string
+	timeFormat        string
+	useTUI            bool
+	reconnectAttempts int
+}
+
 const (
 	defaultConnBaud          = 115200
 	defaultReceiveTimeFormat = "15:04:05.000"
 )
 
-func NewConnCommand() *cobra.Command {
-	var cfg string
-	var logPath string
-	var timeFormat string
-	var useTUI bool
-	var reconnectAttempts int
-
-	connCmd := &cobra.Command{
-		Use:     "conn <port> [baud]",
-		Short:   "Connect to a serial port",
-		Example: connExamples,
-		Args: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 {
-				_ = cmd.Help()
-				return errors.New("serial port is required")
-			}
-			return cobra.RangeArgs(1, 2)(cmd, args)
-		},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			opts, err := parseConnOptions(args, cfg, logPath, timeFormat, useTUI)
-			if err != nil {
-				return err
-			}
-			if reconnectAttempts < 0 {
-				return errors.New("reconnect attempts must be non-negative")
-			}
-			opts.reconnectAttempts = reconnectAttempts
-			return runConn(cmd.Context(), opts)
-		},
-	}
-
-	connCmd.Flags().StringVarP(&cfg, "cfg", "c", "8,N,1", "serial frame as data-bits,parity,stop-bits (example: 8,N|n,1)")
-	connCmd.Flags().StringVar(&logPath, "log", "", "append received bytes to file")
-	connCmd.Flags().StringVar(&timeFormat, "time", "", "Go time format prepended to each received line")
-	connCmd.Flags().Lookup("time").NoOptDefVal = defaultReceiveTimeFormat
-	connCmd.Flags().BoolVar(&useTUI, "tui", false, "open the modern full-screen interface")
-	connCmd.Flags().IntVar(&reconnectAttempts, "reconnect", 5, "number of reconnect attempts after disconnection (0 disables)")
-
-	return connCmd
+func bindConnFlags(cmd *cobra.Command, flags *connFlags) {
+	cmd.Flags().StringVarP(&flags.cfg, "cfg", "c", "8,N,1", "serial frame as data-bits,parity,stop-bits (example: 8,N|n,1)")
+	cmd.Flags().StringVar(&flags.logPath, "log", "", "append received bytes to file")
+	cmd.Flags().StringVar(&flags.timeFormat, "time", "", "Go time format prepended to each received line")
+	cmd.Flags().Lookup("time").NoOptDefVal = defaultReceiveTimeFormat
+	cmd.Flags().BoolVar(&flags.useTUI, "tui", false, "open the modern full-screen interface")
+	cmd.Flags().IntVar(&flags.reconnectAttempts, "reconnect", 5, "number of reconnect attempts after disconnection (0 disables)")
 }
 
 func parseConnOptions(args []string, cfg, logPath, timeFormat string, useTUI bool) (connOptions, error) {

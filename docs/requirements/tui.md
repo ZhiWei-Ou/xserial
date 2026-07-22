@@ -8,7 +8,7 @@ TUI 不再承担文本 Shell 终端职责。需要文本、ANSI 或 Shell 交互
 
 ## 启动
 
-- 使用 `xserial conn <port> [baud] --tui` 进入 TUI。
+- 使用 `xserial <port> [baud] --tui` 进入 TUI。
 - 连接成功后直接进入二进制界面，不再提供 Text/Hex 模式切换。
 - 顶部始终显示端口、波特率、帧配置和连接状态。
 - 连接状态至少区分 connected、disconnected、reconnecting、failed。
@@ -139,4 +139,3 @@ Command Palette 第一阶段只包含：
 - 协议字段解析器和外部协议插件；
 - 完整展开大文件发送字节；
 - 二进制流量记录文件格式。
-

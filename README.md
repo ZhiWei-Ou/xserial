@@ -34,40 +34,34 @@ xserial --version
 先查看系统中的串口：
 
 ```bash
-xserial list
+xserial
 ```
 
 然后连接设备：
-
-```bash
-xserial conn /dev/ttyUSB0
-```
-
-端口名符合当前平台的串口命名规则时，可以省略 `conn`：
 
 ```bash
 xserial /dev/ttyUSB0
 xserial /dev/ttyUSB0 9600 --tui
 ```
 
-无法识别为串口名的参数仍按子命令处理，因此子命令拼写错误不会被当成设备名。
+任意位置参数都会被视为串口名；xserial 不再猜测端口是否符合平台命名规则。
 
 macOS 上的端口通常类似：
 
 ```bash
-xserial conn /dev/cu.usbserial-0001
+xserial /dev/cu.usbserial-0001
 ```
 
 Windows 可以直接使用 COM 端口：
 
 ```powershell
-xserial conn COM3
+xserial COM3
 ```
 
 默认波特率是 `115200`。需要其他波特率时，把它放在端口后面：
 
 ```bash
-xserial conn /dev/ttyUSB0 9600
+xserial /dev/ttyUSB0 9600
 ```
 
 ## Raw 模式
@@ -75,7 +69,7 @@ xserial conn /dev/ttyUSB0 9600
 不带 `--tui` 时，xserial 运行在 raw 模式：键盘输入直接发送给设备，设备返回的原始字节直接写入终端。
 
 ```bash
-xserial conn /dev/ttyUSB0 115200
+xserial /dev/ttyUSB0 115200
 ```
 
 本地命令使用 `Ctrl-P` 作为 prefix。先按 `Ctrl-P`，松开后再按命令键：
@@ -107,7 +101,7 @@ YMODEM 完成信息包含文件 CRC32、失败帧数和重传帧数。协议帧�
 加入 `--tui` 即可打开全屏界面：
 
 ```bash
-xserial conn /dev/ttyUSB0 115200 --tui
+xserial /dev/ttyUSB0 115200 --tui
 ```
 
 TUI 会展示接收与发送字节数、统一的 TX/RX 流量时间线和操作状态。它只面向二进制数据；输入 Hex 字节并按 Enter 后，xserial 会原样发送解析得到的字节，不自动追加 `CR` 或换行。
@@ -151,13 +145,13 @@ AA,01,FF,00,7E
 连接格式是：
 
 ```text
-xserial conn <port> [baud]
+xserial <port> [baud]
 ```
 
 数据位、校验位和停止位通过 `-c` 或 `--cfg` 设置：
 
 ```bash
-xserial conn /dev/ttyUSB0 57600 -c 7,E,1
+xserial /dev/ttyUSB0 57600 -c 7,E,1
 ```
 
 配置格式为：
@@ -173,8 +167,8 @@ data-bits,parity,stop-bits
 连接断开后默认尝试重连 5 次，每次间隔 1 秒。可以指定次数，或用 `0` 禁用：
 
 ```bash
-xserial conn /dev/ttyUSB0 --reconnect 10
-xserial conn /dev/ttyUSB0 --reconnect 0
+xserial /dev/ttyUSB0 --reconnect 10
+xserial /dev/ttyUSB0 --reconnect 0
 ```
 
 ## 保存设备输出
@@ -182,20 +176,20 @@ xserial conn /dev/ttyUSB0 --reconnect 0
 使用 `--log` 将接收到的数据追加到文件：
 
 ```bash
-xserial conn /dev/ttyUSB0 --log device.log
+xserial /dev/ttyUSB0 --log device.log
 ```
 
 完全不写 `--time` 时不添加时间戳。单独传入 `--time` 时使用默认格式 `15:04:05.000`，rawui 会实时显示前缀，指定 `--log` 时同一格式也用于日志文件：
 
 ```bash
-xserial conn /dev/ttyUSB0 --time
-xserial conn /dev/ttyUSB0 --log device.log --time
+xserial /dev/ttyUSB0 --time
+xserial /dev/ttyUSB0 --log device.log --time
 ```
 
 需要自定义时间戳时，使用 `--time="Go 时间格式"`：
 
 ```bash
-xserial conn /dev/ttyUSB0 \
+xserial /dev/ttyUSB0 \
   --log device.log \
   --time="2006-01-02 15:04:05.000"
 ```
@@ -257,11 +251,11 @@ ls -l /dev/ttyUSB0
 先运行：
 
 ```bash
-xserial list
+xserial
 ```
 
 如果设备刚插入，可以在插入前后分别运行一次，对比新增的端口。USB 串口通常还会显示 VID、PID、序列号或产品名称。
 
 ### 如何避免设备输出被本地提示污染？
 
-raw 模式下，设备字节只写入 stdout；xserial 自己的帮助、上传进度和错误写入 stderr。因此可以安全地重定向或管道处理设备输出。
+raw 模式下，设备字节只写入 stdout；xserial 自己的帮助、上传进度和错误写入 stderr。因此默认可以安全地重定向或管道处理设备输出。显式启用 `--time` 时，stdout 会按行增加时间前缀。

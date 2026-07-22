@@ -1,30 +1,13 @@
 package cmd
 
 import (
-	"bytes"
 	"runtime"
 	"strings"
 	"testing"
 )
 
-func TestConnWithoutPortPrintsHelp(t *testing.T) {
-	cmd := NewConnCommand()
-	var output bytes.Buffer
-	cmd.SetOut(&output)
-	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{})
-
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatalf("Execute() error = nil, want error")
-	}
-	if got := output.String(); !strings.Contains(got, "Usage:") || !strings.Contains(got, "conn <port> [baud]") {
-		t.Fatalf("Execute() output = %q, want conn usage", got)
-	}
-}
-
 func TestConnShowsOnlyCurrentPlatformExamples(t *testing.T) {
-	cmd := NewConnCommand()
+	cmd := NewRootCommand()
 
 	examples := map[string]string{
 		"linux":   "/dev/ttyUSB0",
@@ -35,7 +18,7 @@ func TestConnShowsOnlyCurrentPlatformExamples(t *testing.T) {
 	if !supported {
 		want = "<port>"
 	}
-	if !strings.Contains(cmd.Example, "xserial conn "+want) {
+	if !strings.Contains(cmd.Example, "xserial "+want) {
 		t.Fatalf("Example = %q, want port %q", cmd.Example, want)
 	}
 	for platform, port := range examples {
@@ -46,7 +29,7 @@ func TestConnShowsOnlyCurrentPlatformExamples(t *testing.T) {
 }
 
 func TestConnExposesCombinedSerialConfig(t *testing.T) {
-	cmd := NewConnCommand()
+	cmd := NewRootCommand()
 
 	flag := cmd.Flags().Lookup("cfg")
 	if flag == nil {
@@ -67,7 +50,7 @@ func TestConnExposesCombinedSerialConfig(t *testing.T) {
 }
 
 func TestConnExposesReceiveLog(t *testing.T) {
-	cmd := NewConnCommand()
+	cmd := NewRootCommand()
 
 	flag := cmd.Flags().Lookup("log")
 	if flag == nil {
@@ -103,7 +86,7 @@ func TestConnExposesReceiveLog(t *testing.T) {
 }
 
 func TestConnTimeFlagAcceptsOmittedOrExplicitFormat(t *testing.T) {
-	cmd := NewConnCommand()
+	cmd := NewRootCommand()
 	if err := cmd.ParseFlags([]string{"--time"}); err != nil {
 		t.Fatalf("ParseFlags(--time) error = %v", err)
 	}
@@ -111,7 +94,7 @@ func TestConnTimeFlagAcceptsOmittedOrExplicitFormat(t *testing.T) {
 		t.Fatalf("--time value = %q, want %q", got, defaultReceiveTimeFormat)
 	}
 
-	cmd = NewConnCommand()
+	cmd = NewRootCommand()
 	if err := cmd.ParseFlags([]string{"--time=2006-01-02 15:04:05"}); err != nil {
 		t.Fatalf("ParseFlags(--time=format) error = %v", err)
 	}
@@ -131,7 +114,7 @@ func TestOpenReceiveLogWithoutPathReturnsNilWriter(t *testing.T) {
 }
 
 func TestConnDoesNotExposePortFlag(t *testing.T) {
-	cmd := NewConnCommand()
+	cmd := NewRootCommand()
 
 	if flag := cmd.Flags().Lookup("port"); flag != nil {
 		t.Fatalf("port flag exists, want nil")
