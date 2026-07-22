@@ -9,7 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ZhiWei-Ou/xserial/internal/session"
+	"github.com/ZhiWei-Ou/xserial/internal/linetime"
+	session "github.com/ZhiWei-Ou/xserial/internal/middleware"
 	"github.com/ZhiWei-Ou/xserial/internal/transfer"
 	"github.com/muesli/cancelreader"
 	"golang.org/x/term"
@@ -53,11 +54,12 @@ func (t *OSTerminal) Restore() error {
 }
 
 type Config struct {
-	Terminal  Terminal
-	Input     io.Reader
-	Output    io.Writer
-	Local     io.Writer
-	PrefixKey byte
+	Terminal   Terminal
+	Input      io.Reader
+	Output     io.Writer
+	Local      io.Writer
+	PrefixKey  byte
+	TimeFormat string
 }
 
 type Frontend struct {
@@ -179,6 +181,10 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 		}
 	}
 	requestRead()
+	deviceOutput := f.cfg.Output
+	if f.cfg.TimeFormat != "" {
+		deviceOutput = linetime.NewWriter(deviceOutput, f.cfg.TimeFormat)
+	}
 
 	for {
 		select {
@@ -193,9 +199,15 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 				if ymodemMode {
 					continue
 				}
-				if err := transfer.WriteFull(f.cfg.Output, event.Data); err != nil {
+				if err := transfer.WriteFull(deviceOutput, event.Data); err != nil {
 					return fmt.Errorf("write device output: %w", err)
 				}
+			case session.Disconnected:
+				printLocalLine(f.cfg.Local, fmt.Sprintf("[ DISCONNECTED ] %v", event.Err))
+			case session.Reconnecting:
+				printLocalLine(f.cfg.Local, fmt.Sprintf("[ RECONNECTING ] attempt=%d/%d", event.Attempt, event.Limit))
+			case session.Reconnected:
+				printLocalLine(f.cfg.Local, "[ RECONNECTED ]")
 			case session.UploadProgress:
 				progressLineOpen = event.Written != event.Total
 				ending := ""

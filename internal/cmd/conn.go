@@ -11,31 +11,36 @@ import (
 	"time"
 
 	"github.com/ZhiWei-Ou/xserial/internal/logging"
+	session "github.com/ZhiWei-Ou/xserial/internal/middleware"
 	"github.com/ZhiWei-Ou/xserial/internal/rawui"
 	"github.com/ZhiWei-Ou/xserial/internal/serialport"
-	"github.com/ZhiWei-Ou/xserial/internal/session"
 	serialtui "github.com/ZhiWei-Ou/xserial/internal/tui"
 	"github.com/spf13/cobra"
 )
 
 type connOptions struct {
-	port       string
-	baud       int
-	dataBits   int
-	parity     string
-	stopBits   string
-	logPath    string
-	timeFormat string
-	tui        bool
+	port              string
+	baud              int
+	dataBits          int
+	parity            string
+	stopBits          string
+	logPath           string
+	timeFormat        string
+	tui               bool
+	reconnectAttempts int
 }
 
-const defaultConnBaud = 115200
+const (
+	defaultConnBaud          = 115200
+	defaultReceiveTimeFormat = "15:04:05.000"
+)
 
 func NewConnCommand() *cobra.Command {
 	var cfg string
 	var logPath string
 	var timeFormat string
 	var useTUI bool
+	var reconnectAttempts int
 
 	connCmd := &cobra.Command{
 		Use:     "conn <port> [baud]",
@@ -53,6 +58,10 @@ func NewConnCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if reconnectAttempts < 0 {
+				return errors.New("reconnect attempts must be non-negative")
+			}
+			opts.reconnectAttempts = reconnectAttempts
 			return runConn(cmd.Context(), opts)
 		},
 	}
@@ -60,18 +69,21 @@ func NewConnCommand() *cobra.Command {
 	connCmd.Flags().StringVarP(&cfg, "cfg", "c", "8,N,1", "serial frame as data-bits,parity,stop-bits (example: 8,N|n,1)")
 	connCmd.Flags().StringVar(&logPath, "log", "", "append received bytes to file")
 	connCmd.Flags().StringVar(&timeFormat, "time", "", "Go time format prepended to each received line")
+	connCmd.Flags().Lookup("time").NoOptDefVal = defaultReceiveTimeFormat
 	connCmd.Flags().BoolVar(&useTUI, "tui", false, "open the modern full-screen interface")
+	connCmd.Flags().IntVar(&reconnectAttempts, "reconnect", 5, "number of reconnect attempts after disconnection (0 disables)")
 
 	return connCmd
 }
 
 func parseConnOptions(args []string, cfg, logPath, timeFormat string, useTUI bool) (connOptions, error) {
 	opts := connOptions{
-		port:       args[0],
-		baud:       defaultConnBaud,
-		logPath:    logPath,
-		timeFormat: timeFormat,
-		tui:        useTUI,
+		port:              args[0],
+		baud:              defaultConnBaud,
+		logPath:           logPath,
+		timeFormat:        timeFormat,
+		tui:               useTUI,
+		reconnectAttempts: 5,
 	}
 
 	if len(args) == 2 {
@@ -167,10 +179,11 @@ func runConn(ctx context.Context, opts connOptions) error {
 	} else {
 		logger.Info("session.ready", "help", "Ctrl-P h", "quit", "Ctrl-P q")
 		frontend = rawui.New(rawui.Config{
-			Terminal: rawui.NewOSTerminal(os.Stdin),
-			Input:    os.Stdin,
-			Output:   os.Stdout,
-			Local:    os.Stderr,
+			Terminal:   rawui.NewOSTerminal(os.Stdin),
+			Input:      os.Stdin,
+			Output:     os.Stdout,
+			Local:      os.Stderr,
+			TimeFormat: opts.timeFormat,
 		})
 	}
 
@@ -178,6 +191,12 @@ func runConn(ctx context.Context, opts connOptions) error {
 		Port:              port,
 		Reconnect:         openPort,
 		ReconnectInterval: time.Second,
+		ReconnectAttempts: func() int {
+			if opts.reconnectAttempts == 0 {
+				return -1
+			}
+			return opts.reconnectAttempts
+		}(),
 		Frontend:          frontend,
 		ReceiveLog:        receiveLog,
 		ReceiveTimeFormat: opts.timeFormat,

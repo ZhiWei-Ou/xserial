@@ -1,4 +1,4 @@
-package session
+package linetime
 
 import (
 	"bytes"
@@ -9,15 +9,15 @@ import (
 	"github.com/ZhiWei-Ou/xserial/internal/transfer"
 )
 
-type lineTimeWriter struct {
+type Writer struct {
 	dst       io.Writer
 	format    string
 	now       func() time.Time
 	lineStart bool
 }
 
-func newLineTimeWriter(dst io.Writer, format string) *lineTimeWriter {
-	return &lineTimeWriter{
+func NewWriter(dst io.Writer, format string) *Writer {
+	return &Writer{
 		dst:       dst,
 		format:    format,
 		now:       time.Now,
@@ -25,7 +25,7 @@ func newLineTimeWriter(dst io.Writer, format string) *lineTimeWriter {
 	}
 }
 
-func (w *lineTimeWriter) Write(data []byte) (int, error) {
+func (w *Writer) Write(data []byte) (int, error) {
 	written := 0
 	for len(data) > 0 {
 		if w.lineStart {

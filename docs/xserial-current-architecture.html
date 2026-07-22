@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>xserial 当前系统架构</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --background: Canvas;
+      --foreground: CanvasText;
+      --card: Canvas;
+      --card-foreground: CanvasText;
+      --primary: AccentColor;
+      --primary-foreground: AccentColorText;
+      --secondary: ButtonFace;
+      --secondary-foreground: ButtonText;
+      --muted: color-mix(in srgb, CanvasText 7%, Canvas);
+      --muted-foreground: GrayText;
+      --accent: Highlight;
+      --accent-foreground: HighlightText;
+      --border: color-mix(in srgb, CanvasText 18%, transparent);
+      --input: ButtonBorder;
+      --ring: AccentColor;
+      --viz-series-1: AccentColor;
+      --viz-series-2: LinkText;
+      --viz-series-3: VisitedText;
+      --viz-series-4: ActiveText;
+      --viz-series-5: Highlight;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--background);
+      color: var(--foreground);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      width: min(calc(100% - 2rem), 74rem);
+      margin-inline: auto;
+      padding-block: 2rem 3rem;
+    }
+    header { margin-bottom: 1.5rem; }
+    h1 { font-weight: 500; margin-bottom: 0.35rem; }
+    header p { color: var(--muted-foreground); margin: 0; }
+    button { font: inherit; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.55rem 0.8rem;
+      border: 1px solid var(--border);
+      border-radius: 0.45rem;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: var(--primary-foreground);
+      border-color: var(--primary);
+    }
+    .btn-secondary {
+      background: var(--secondary);
+      color: var(--secondary-foreground);
+    }
+    .btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+    code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    @media (max-width: 420px) {
+      main { width: min(calc(100% - 1rem), 74rem); padding-block: 1rem 2rem; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>xserial 当前系统架构</h1>
+    <p>模块化单体 · 共享会话内核 · 双前端适配 · 显式并发与资源所有权</p>
+  </header>
+
+<div id="xserial-architecture-map" class="xsa-root">
+  <style>
+    #xserial-architecture-map {
+      color: var(--foreground);
+      width: 100%;
+    }
+    #xserial-architecture-map * { box-sizing: border-box; }
+    #xserial-architecture-map .xsa-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+    #xserial-architecture-map .xsa-view[hidden] { display: none; }
+    #xserial-architecture-map .xsa-stack {
+      display: grid;
+      gap: 0.7rem;
+    }
+    #xserial-architecture-map .xsa-layer {
+      display: grid;
+      grid-template-columns: minmax(8.5rem, 0.7fr) minmax(0, 2.3fr);
+      gap: 0.85rem;
+      align-items: stretch;
+    }
+    #xserial-architecture-map .xsa-layer-label {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 0.2rem;
+      color: var(--muted-foreground);
+    }
+    #xserial-architecture-map .xsa-layer-label strong { color: var(--foreground); font-weight: 500; }
+    #xserial-architecture-map .xsa-nodes {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+      gap: 0.55rem;
+      position: relative;
+    }
+    #xserial-architecture-map .xsa-node {
+      min-width: 0;
+      padding: 0.75rem;
+      background: color-mix(in srgb, var(--viz-series-1, var(--primary)) 10%, transparent);
+    }
+    #xserial-architecture-map .xsa-node[data-tone="2"] { background: color-mix(in srgb, var(--viz-series-2, var(--primary)) 10%, transparent); }
+    #xserial-architecture-map .xsa-node[data-tone="3"] { background: color-mix(in srgb, var(--viz-series-3, var(--primary)) 10%, transparent); }
+    #xserial-architecture-map .xsa-node[data-tone="4"] { background: color-mix(in srgb, var(--viz-series-4, var(--primary)) 10%, transparent); }
+    #xserial-architecture-map .xsa-node[data-tone="5"] { background: color-mix(in srgb, var(--viz-series-5, var(--primary)) 10%, transparent); }
+    #xserial-architecture-map .xsa-node strong,
+    #xserial-architecture-map .xsa-node code { display: block; font-weight: 500; overflow-wrap: anywhere; }
+    #xserial-architecture-map .xsa-node span { display: block; color: var(--muted-foreground); margin-top: 0.25rem; }
+    #xserial-architecture-map .xsa-arrow {
+      text-align: center;
+      color: var(--muted-foreground);
+      min-height: 1rem;
+    }
+    #xserial-architecture-map .xsa-contracts {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.55rem;
+      margin-top: 0.8rem;
+    }
+    #xserial-architecture-map .xsa-contract {
+      padding-top: 0.65rem;
+      border-top: 1px solid var(--border);
+    }
+    #xserial-architecture-map .xsa-contract strong { display: block; font-weight: 500; }
+    #xserial-architecture-map .xsa-contract span { color: var(--muted-foreground); }
+    #xserial-architecture-map .xsa-flow {
+      display: grid;
+      gap: 1rem;
+    }
+    #xserial-architecture-map .xsa-lane {
+      display: grid;
+      grid-template-columns: minmax(5.5rem, 0.7fr) repeat(5, minmax(5.5rem, 1fr));
+      align-items: center;
+      gap: 0.45rem;
+    }
+    #xserial-architecture-map .xsa-lane-title { color: var(--muted-foreground); }
+    #xserial-architecture-map .xsa-step {
+      position: relative;
+      padding: 0.7rem 0.5rem;
+      text-align: center;
+      background: color-mix(in srgb, var(--viz-series-2, var(--primary)) 10%, transparent);
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    #xserial-architecture-map .xsa-step:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      right: -0.38rem;
+      top: 50%;
+      transform: translate(50%, -50%);
+      color: var(--muted-foreground);
+      z-index: 1;
+    }
+    #xserial-architecture-map .xsa-step[data-dir="back"]:not(:last-child)::after { content: "←"; }
+    #xserial-architecture-map .xsa-flow-note {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.75rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--border);
+    }
+    #xserial-architecture-map .xsa-flow-note strong { display: block; font-weight: 500; }
+    #xserial-architecture-map .xsa-flow-note span { color: var(--muted-foreground); }
+    #xserial-architecture-map .xsa-principles {
+      display: grid;
+      grid-template-columns: minmax(11rem, 0.85fr) minmax(0, 2.15fr);
+      gap: 1rem;
+      align-items: start;
+    }
+    #xserial-architecture-map .xsa-principle-list {
+      display: grid;
+      gap: 0.45rem;
+    }
+    #xserial-architecture-map .xsa-principle-list .btn { justify-content: flex-start; text-align: left; }
+    #xserial-architecture-map .xsa-principle-detail {
+      min-width: 0;
+    }
+    #xserial-architecture-map .xsa-principle-detail h3 { margin-top: 0; }
+    #xserial-architecture-map .xsa-principle-detail p { color: var(--muted-foreground); }
+    #xserial-architecture-map .xsa-evidence {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.7rem;
+      margin-top: 1rem;
+    }
+    #xserial-architecture-map .xsa-evidence-item {
+      padding-top: 0.65rem;
+      border-top: 1px solid var(--border);
+    }
+    #xserial-architecture-map .xsa-evidence-item strong { display: block; font-weight: 500; }
+    #xserial-architecture-map .xsa-evidence-item code { color: var(--foreground); overflow-wrap: anywhere; }
+    #xserial-architecture-map .xsa-summary {
+      margin-top: 1rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted-foreground);
+    }
+    @media (max-width: 640px) {
+      #xserial-architecture-map .xsa-layer,
+      #xserial-architecture-map .xsa-principles { grid-template-columns: 1fr; }
+      #xserial-architecture-map .xsa-contracts,
+      #xserial-architecture-map .xsa-flow-note,
+      #xserial-architecture-map .xsa-evidence { grid-template-columns: 1fr; }
+      #xserial-architecture-map .xsa-lane {
+        grid-template-columns: 1fr;
+        gap: 0.35rem;
+      }
+      #xserial-architecture-map .xsa-step:not(:last-child)::after,
+      #xserial-architecture-map .xsa-step[data-dir="back"]:not(:last-child)::after {
+        content: "↓";
+        right: 50%;
+        top: auto;
+        bottom: -0.35rem;
+        transform: translate(50%, 50%);
+      }
+    }
+  </style>
+
+  <nav class="xsa-tabs" aria-label="架构视图">
+    <button class="btn btn-primary" type="button" data-view="layers" aria-pressed="true">分层总览</button>
+    <button class="btn btn-secondary" type="button" data-view="runtime" aria-pressed="false">运行链路</button>
+    <button class="btn btn-secondary" type="button" data-view="principles" aria-pressed="false">设计原则</button>
+  </nav>
+
+  <section class="xsa-view" data-panel="layers" aria-label="系统分层">
+    <div class="xsa-stack">
+      <div class="xsa-layer">
+        <div class="xsa-layer-label"><strong>进程入口</strong><span>启动与退出边界</span></div>
+        <div class="xsa-nodes">
+          <div class="xsa-node"><code>cmd/xserial</code><span>signal context · 最终错误 · exit code</span></div>
+        </div>
+      </div>
+      <div class="xsa-arrow" aria-hidden="true">↓</div>
+      <div class="xsa-layer">
+        <div class="xsa-layer-label"><strong>命令与组装层</strong><span>解析输入，注入依赖</span></div>
+        <div class="xsa-nodes">
+          <div class="xsa-node" data-tone="2"><code>internal/cmd</code><span>Cobra · root / list / conn · 配置校验</span></div>
+        </div>
+      </div>
+      <div class="xsa-arrow" aria-hidden="true">↓ 组装 Frontend + Port + Logger + ReceiveLog</div>
+      <div class="xsa-layer">
+        <div class="xsa-layer-label"><strong>应用核心</strong><span>会话编排与串口连接内核</span></div>
+        <div class="xsa-nodes">
+          <div class="xsa-node" data-tone="3"><code>internal/middleware</code><span>Endpoint · 双向 Handler Pipeline · 方向独占 · 传输编排</span></div>
+          <div class="xsa-node" data-tone="3"><code>internal/backend</code><span>串口连接 · 单 reader / writer · 有限 reconnect · close</span></div>
+        </div>
+      </div>
+      <div class="xsa-arrow" aria-hidden="true">↙ 前端端口　　↓ 能力调用　　↘ 基础设施端口</div>
+      <div class="xsa-layer">
+        <div class="xsa-layer-label"><strong>适配与能力层</strong><span>围绕真实变化点拆分</span></div>
+        <div class="xsa-nodes">
+          <div class="xsa-node" data-tone="4"><code>internal/rawui</code><span>raw mode · Ctrl-P · stdin / stdout / stderr</span></div>
+          <div class="xsa-node" data-tone="4"><code>internal/tui</code><span>Bubble Tea · 智能 Hex · TX / RX 时间线</span></div>
+          <div class="xsa-node" data-tone="5"><code>internal/transfer</code><span>raw upload · YMODEM · WriteFull</span></div>
+          <div class="xsa-node" data-tone="5"><code>internal/serialport</code><span>List / Open · 平台详情隔离</span></div>
+          <div class="xsa-node" data-tone="5"><code>internal/logging</code><span>结构化业务日志 · stderr</span></div>
+        </div>
+      </div>
+      <div class="xsa-arrow" aria-hidden="true">↓</div>
+      <div class="xsa-layer">
+        <div class="xsa-layer-label"><strong>外部运行环境</strong><span>第三方库与系统资源</span></div>
+        <div class="xsa-nodes">
+          <div class="xsa-node"><strong>CLI / UI</strong><span>Cobra · Bubble Tea · Lip Gloss · x/term</span></div>
+          <div class="xsa-node"><strong>I/O</strong><span>go.bug.st/serial · OS TTY · 文件系统</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="xsa-contracts" aria-label="关键边界">
+      <div class="xsa-contract"><strong>架构形态</strong><span>按职责分包的模块化单体，不是微服务或插件框架。</span></div>
+      <div class="xsa-contract"><strong>依赖方向</strong><span>命令层组装；frontend → middleware → backend，内核不认识 Cobra、具体 UI 和第三方串口类型。</span></div>
+      <div class="xsa-contract"><strong>核心边界</strong><span>rawui / TUI 通过 Endpoint + Event 协作；所有字节经过双向 Pipeline。</span></div>
+    </div>
+  </section>
+
+  <section class="xsa-view" data-panel="runtime" aria-label="运行时数据流" hidden>
+    <div class="xsa-flow">
+      <div class="xsa-lane">
+        <div class="xsa-lane-title">发送链路</div>
+        <div class="xsa-step">stdin / TUI input</div>
+        <div class="xsa-step">Frontend</div>
+        <div class="xsa-step">Endpoint.Send</div>
+        <div class="xsa-step">Outbound handlers（逆序）</div>
+        <div class="xsa-step">backend writer → Serial</div>
+      </div>
+      <div class="xsa-lane">
+        <div class="xsa-lane-title">接收链路</div>
+        <div class="xsa-step" data-dir="back">Serial Read</div>
+        <div class="xsa-step" data-dir="back">backend reader</div>
+        <div class="xsa-step" data-dir="back">Inbound handlers（顺序）</div>
+        <div class="xsa-step" data-dir="back">Frontend</div>
+        <div class="xsa-step" data-dir="back">stdout / TUI</div>
+      </div>
+      <div class="xsa-lane">
+        <div class="xsa-lane-title">传输链路</div>
+        <div class="xsa-step">本地命令</div>
+        <div class="xsa-step">StartTransfer</div>
+        <div class="xsa-step">独占 transfer gate</div>
+        <div class="xsa-step">middleware → backend</div>
+        <div class="xsa-step">Serial</div>
+      </div>
+      <div class="xsa-lane">
+        <div class="xsa-lane-title">关闭链路</div>
+        <div class="xsa-step">任一任务结束</div>
+        <div class="xsa-step">cancel context</div>
+        <div class="xsa-step">Close 解阻塞 I/O</div>
+        <div class="xsa-step">等待全部任务</div>
+        <div class="xsa-step">关闭 events / 恢复终端</div>
+      </div>
+    </div>
+    <div class="xsa-flow-note">
+      <div><strong>可控展示</strong><span>raw 默认保持 stdout 字节透明；启用 --time 后仅为接收行增加时间前缀，本地提示仍只走 stderr。</span></div>
+      <div><strong>方向独占</strong><span>raw upload 独占 outbound；YMODEM 独占 duplex，避免串口字节交错。</span></div>
+      <div><strong>可扩展处理</strong><span>Handler 可观察、变换或消费 Envelope，为过滤与重渲染保留 seam。</span></div>
+    </div>
+  </section>
+
+  <section class="xsa-view" data-panel="principles" aria-label="软件设计原则" hidden>
+    <div class="xsa-principles">
+      <div class="xsa-principle-list" role="group" aria-label="选择设计原则">
+        <button class="btn btn-primary" type="button" data-principle="soc" aria-pressed="true">关注点分离 / SRP</button>
+        <button class="btn btn-secondary" type="button" data-principle="dip" aria-pressed="false">依赖倒置 / ISP</button>
+        <button class="btn btn-secondary" type="button" data-principle="encapsulation" aria-pressed="false">封装与信息隐藏</button>
+        <button class="btn btn-secondary" type="button" data-principle="ocp" aria-pressed="false">选择性开放封闭</button>
+        <button class="btn btn-secondary" type="button" data-principle="kiss" aria-pressed="false">KISS / YAGNI</button>
+        <button class="btn btn-secondary" type="button" data-principle="ownership" aria-pressed="false">显式所有权与并发收敛</button>
+        <button class="btn btn-secondary" type="button" data-principle="testability" aria-pressed="false">依赖注入与可测试性</button>
+      </div>
+      <article class="xsa-principle-detail" aria-live="polite">
+        <h3 data-detail-title>关注点分离 / 单一职责</h3>
+        <p data-detail-summary>按命令、middleware、backend、前端、传输、串口和日志拆包；每个包围绕一种变化原因组织。</p>
+        <div class="xsa-evidence">
+          <div class="xsa-evidence-item"><strong>代码落点</strong><code data-detail-code>internal/cmd · internal/middleware · internal/backend · internal/rawui · internal/tui</code></div>
+          <div class="xsa-evidence-item"><strong>带来的约束</strong><span data-detail-effect>命令层不写串口循环，middleware 不处理具体 UI，backend 不认识传输表现。</span></div>
+        </div>
+        <div class="xsa-summary" data-detail-caveat>这是“模块化单体 + 清晰边界”，不是为了层数而增加转发层。</div>
+      </article>
+    </div>
+  </section>
+
+  <script>
+    (() => {
+      const root = document.getElementById('xserial-architecture-map');
+      const tabs = Array.from(root.querySelectorAll('[data-view]'));
+      const panels = Array.from(root.querySelectorAll('[data-panel]'));
+      tabs.forEach((tab) => {
+        tab.addEventListener('click', () => {
+          tabs.forEach((item) => {
+            const selected = item === tab;
+            item.setAttribute('aria-pressed', String(selected));
+            item.classList.toggle('btn-primary', selected);
+            item.classList.toggle('btn-secondary', !selected);
+          });
+          panels.forEach((panel) => { panel.hidden = panel.dataset.panel !== tab.dataset.view; });
+        });
+      });
+
+      const principles = {
+        soc: {
+          title: '关注点分离 / 单一职责',
+          summary: '按命令、middleware、backend、前端、传输、串口和日志拆包；每个包围绕一种变化原因组织。',
+          code: 'internal/cmd · internal/middleware · internal/backend · internal/rawui · internal/tui',
+          effect: '命令层不写串口循环，middleware 不处理具体 UI，backend 不认识传输表现。',
+          caveat: '这是“模块化单体 + 清晰边界”，不是为了层数而增加转发层。'
+        },
+        dip: {
+          title: '依赖倒置 / 接口隔离',
+          summary: '应用核心依赖自己需要的能力契约，具体实现由上层组装并注入。',
+          code: 'backend.Port · middleware.Handler · middleware.Frontend · middleware.Endpoint',
+          effect: '应用核心不依赖 Cobra、Bubble Tea、go.bug.st/serial 的具体类型；测试可替换端口、Handler 与前端。',
+          caveat: '接口定义在调用方一侧，并保持面向使用场景的窄表面。'
+        },
+        encapsulation: {
+          title: '封装与信息隐藏',
+          summary: '平台、终端和协议细节被限制在各自模块中，对外只暴露稳定能力。',
+          code: 'serialport.Open / List · Frontend.Run · transfer.WriteFull / YMODEM',
+          effect: '平台分支、raw mode 状态、Bubble Tea 模型和 YMODEM 帧不会扩散进命令层。',
+          caveat: 'raw stdout 默认透明；--time 是显式的接收展示变换，本地 UI、业务日志和 receive log 仍是独立通道。'
+        },
+        ocp: {
+          title: '选择性开放封闭',
+          summary: '只在已经出现真实变体的位置建立扩展缝，而不是设计通用插件系统。',
+          code: 'Pipeline Handler · Frontend: rawui / tui · transfer gate · details*.go',
+          effect: '增加过滤、标注、前端、传输算法或平台适配时，尽量不改变 backend 连接内核。',
+          caveat: '这是选择性 OCP：扩展点由当前需求证明，未追求所有模块都可插拔。'
+        },
+        kiss: {
+          title: 'KISS / YAGNI',
+          summary: '优先直白实现；只有第二个真实实现或外部副作用需要替换时才引入接口。',
+          code: '模块化单体 · 无插件框架 · 无事件总线 · 无多层空接口',
+          effect: '减少浅层转发和预测式抽象，让依赖与资源生命周期可直接追踪。',
+          caveat: '会话事件 channel 是前后端的明确协作协议，不是全局事件总线。'
+        },
+        ownership: {
+          title: '显式所有权与并发收敛',
+          summary: '资源、goroutine、channel 和串口写入都有唯一且可说明的所有者。',
+          code: 'backend.Session.Run · transfer gate · context cancel · WaitGroup · Close',
+          effect: '同一时刻只有一个串口 writer；取消后先解除阻塞，再等待后台任务退出。',
+          caveat: '这不是经典 SOLID 条目，但它是该终端工具最关键的可靠性设计原则。'
+        },
+        testability: {
+          title: '依赖注入与可测试性',
+          summary: '命令层负责组装，核心能力通过配置和标准小接口传入，测试观察公开行为。',
+          code: 'middleware.Config · backend.Port · io.Reader / Writer · memory fake port',
+          effect: '可模拟阻塞读取、短写、关闭解阻塞、重连和前端退出，不依赖真实串口或 TTY。',
+          caveat: '依赖注入采用 Go 的显式值与小接口，不使用 DI 容器。'
+        }
+      };
+
+      const principleButtons = Array.from(root.querySelectorAll('[data-principle]'));
+      const title = root.querySelector('[data-detail-title]');
+      const summary = root.querySelector('[data-detail-summary]');
+      const code = root.querySelector('[data-detail-code]');
+      const effect = root.querySelector('[data-detail-effect]');
+      const caveat = root.querySelector('[data-detail-caveat]');
+      principleButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+          const detail = principles[button.dataset.principle];
+          principleButtons.forEach((item) => {
+            const selected = item === button;
+            item.setAttribute('aria-pressed', String(selected));
+            item.classList.toggle('btn-primary', selected);
+            item.classList.toggle('btn-secondary', !selected);
+          });
+          title.textContent = detail.title;
+          summary.textContent = detail.summary;
+          code.textContent = detail.code;
+          effect.textContent = detail.effect;
+          caveat.textContent = detail.caveat;
+        });
+      });
+    })();
+  </script>
+</div>
+</main>
+</body>
+</html>

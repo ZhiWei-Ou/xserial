@@ -2,7 +2,7 @@
 
 xserial 是一个简单、可靠的跨平台串口终端。
 
-它既可以像 `screen` 一样直接连接设备，也提供了一个更适合观察日志和控制 MCU 的全屏 TUI。你可以用它调试开发板、进入设备 Shell、查看带颜色的运行日志，或者在没有 Shell 的设备上直接收发 Hex 字节。
+它既可以像 `screen` 一样通过 rawui 连接文本或 Shell 设备，也提供了一个面向二进制协议设备的全屏 TUI。你可以用它调试开发板、进入设备 Shell，或者以 Hex 形式收发二进制数据。
 
 ![xserial TUI](assets/screen.png)
 
@@ -12,8 +12,8 @@ xserial 是一个简单、可靠的跨平台串口终端。
 
 - 紧凑的连接命令，默认使用常见的 `115200 / 8,N,1` 配置；
 - raw 终端模式，设备字节不会被日志或界面信息污染；
-- 全屏 TUI，支持历史滚动、安全的 ANSI 颜色和命令面板；
-- Text 与 Hex 收发，既能操作 Shell，也能控制二进制协议设备；
+- 面向文本与 Shell 设备的透明 rawui；
+- 面向二进制数据的全屏 TUI，支持智能 Hex 输入、TX/RX 时间线和命令面板；
 - 接收日志、行时间戳和 raw 文件上传；
 - 支持 Linux、macOS 和 Windows。
 
@@ -91,6 +91,8 @@ xserial conn /dev/ttyUSB0 115200
 
 raw upload 是纯字节发送。它适合设备已经准备好接收固定长度数据的场景，但不提供校验、重传或断点续传。
 
+使用 `--time` 时，rawui 会在每个接收行开头实时显示时间前缀；不使用该 flag 时仍保持设备输出字节透明。
+
 YMODEM 上传会提示输入本地文件路径；YMODEM 下载使用发送端提供的文件名保存到当前目录。为避免意外覆盖，目标文件已存在时下载会失败。
 
 YMODEM 完成信息包含文件 CRC32、失败帧数和重传帧数。协议帧被拒绝或校验失败并触发重传时，会同时输出 `transfer.ymodem_frame_retry` 警告日志。
@@ -108,7 +110,7 @@ YMODEM 完成信息包含文件 CRC32、失败帧数和重传帧数。协议帧�
 xserial conn /dev/ttyUSB0 115200 --tui
 ```
 
-TUI 会展示接收与发送字节数、当前模式、设备输出和操作状态。默认使用 Text 模式，在输入框中输入命令并按 Enter 后，xserial 会发送文本并追加一个 `CR`（`\r`）。
+TUI 会展示接收与发送字节数、统一的 TX/RX 流量时间线和操作状态。它只面向二进制数据；输入 Hex 字节并按 Enter 后，xserial 会原样发送解析得到的字节，不自动追加 `CR` 或换行。
 
 常用操作：
 
@@ -116,34 +118,33 @@ TUI 会展示接收与发送字节数、当前模式、设备输出和操作状�
 |---|---|
 | `Ctrl-P` | 打开或关闭命令面板 |
 | `Ctrl-C` | 退出连接 |
-| `↑` / `↓` | 按行浏览历史输出 |
-| `PageUp` / `PageDown` | 按页浏览历史输出 |
+| `↑` / `↓` | 浏览已发送的 Hex 历史 |
+| `PageUp` / `PageDown` | 按页浏览流量历史 |
 | `Esc` | 关闭命令面板、取消路径输入或取消传输 |
 
 命令面板中可以：
 
-- 切换 Text / Hex 模式；
 - 上传 raw 文件；
-- 使用 YMODEM 上传或下载文件；
 - 清空当前显示历史；
 - 取消正在进行的传输；
 - 退出连接。
 
-YMODEM 传输期间，状态栏会显示进度、重传帧和失败原因；完成后显示文件 CRC32、失败帧数与重传帧数。
+YMODEM 仍可在 rawui 中使用，但不属于 TUI 的二进制交互界面。
 
 TUI 默认保留最近 `5000` 条完整逻辑行。滚动查看历史时，新收到的数据不会把当前阅读位置强行拉回底部。
 
-### Hex 模式
+### Hex 输入与流量时间线
 
-Hex 模式适合没有 Shell、直接通过字节命令控制的 MCU。通过 `Ctrl-P` 命令面板切换到 Hex 后，可以输入以空格分隔的两位十六进制字节：
+TUI 接受多种便捷写法：
 
 ```text
 AA 01 FF 00 7E
+AA01FF007E
+AA,01,FF,00,7E
+0xAA 0x01 0xFF 0x00 0x7E
 ```
 
-每一组必须正好是两位 Hex 数字。发送时不会自动追加 `CR` 或换行。设备返回的数据会以经典 hexdump 格式显示，包括偏移、Hex 字节和可打印 ASCII。
-
-Text/Hex 切换只影响之后收到的数据，已经显示的历史不会被重新解释。
+输入会实时规范化为大写、空格分隔的 Hex，并显示字节数或格式错误。发送和接收数据都进入同一时间线，每行包含 `TX`/`RX` 方向、长度、Hex 字节和可打印 ASCII。
 
 ## 串口帧配置
 
@@ -169,6 +170,13 @@ data-bits,parity,stop-bits
 - stop bits：`1`、`1.5`、`2`；
 - 默认值：`8,N,1`。
 
+连接断开后默认尝试重连 5 次，每次间隔 1 秒。可以指定次数，或用 `0` 禁用：
+
+```bash
+xserial conn /dev/ttyUSB0 --reconnect 10
+xserial conn /dev/ttyUSB0 --reconnect 0
+```
+
 ## 保存设备输出
 
 使用 `--log` 将接收到的数据追加到文件：
@@ -177,12 +185,19 @@ data-bits,parity,stop-bits
 xserial conn /dev/ttyUSB0 --log device.log
 ```
 
-还可以使用 Go 时间格式为每一行添加时间戳：
+完全不写 `--time` 时不添加时间戳。单独传入 `--time` 时使用默认格式 `15:04:05.000`，rawui 会实时显示前缀，指定 `--log` 时同一格式也用于日志文件：
+
+```bash
+xserial conn /dev/ttyUSB0 --time
+xserial conn /dev/ttyUSB0 --log device.log --time
+```
+
+需要自定义时间戳时，使用 `--time="Go 时间格式"`：
 
 ```bash
 xserial conn /dev/ttyUSB0 \
   --log device.log \
-  --time "2006-01-02 15:04:05.000"
+  --time="2006-01-02 15:04:05.000"
 ```
 
 时间格式遵循 Go 的 reference time 写法，也就是用固定时间 `Mon Jan 2 15:04:05 MST 2006` 的组成部分描述目标格式。下面是几种常见写法：
@@ -195,7 +210,7 @@ xserial conn /dev/ttyUSB0 \
 | `"2006-01-02T15:04:05.000Z07:00"` | 带时区的 ISO 8601 风格时间 |
 | `"Jan 02 15:04:05"` | 类似传统系统日志的格式 |
 
-raw 模式下，时间戳只进入日志文件，不会插入设备输出；TUI 会同时在显示内容中使用该格式。
+rawui 会把时间前缀插入实时显示的每个接收行；receive log 和 TUI 也使用同一格式。不写 `--time` 时，这些输出都不添加时间戳。
 
 ## Shell completion
 

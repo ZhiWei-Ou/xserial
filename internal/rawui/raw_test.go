@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/ZhiWei-Ou/xserial/internal/logging"
-	"github.com/ZhiWei-Ou/xserial/internal/session"
+	session "github.com/ZhiWei-Ou/xserial/internal/middleware"
 )
 
 type fakeTerminal struct {
@@ -165,6 +165,35 @@ func TestRawFrontendWritesReceivedBytesTransparently(t *testing.T) {
 	}
 	if !bytes.Equal(output.Bytes(), want) {
 		t.Fatalf("output = %v, want %v", output.Bytes(), want)
+	}
+}
+
+func TestRawFrontendPrefixesReceivedLinesWhenTimeIsEnabled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	endpoint := &fakeEndpoint{events: make(chan session.Event, 2), cancel: cancel}
+	input, inputWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer inputWriter.Close()
+	endpoint.events <- session.Received{Data: []byte("first\r")}
+	endpoint.events <- session.Received{Data: []byte("\nsecond")}
+	close(endpoint.events)
+
+	var output bytes.Buffer
+	frontend := New(Config{
+		Terminal:   &fakeTerminal{},
+		Input:      input,
+		Output:     &output,
+		Local:      &bytes.Buffer{},
+		TimeFormat: "stamp",
+	})
+	if err := frontend.Run(ctx, endpoint); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if want := "[stamp] first\r\n[stamp] second"; output.String() != want {
+		t.Fatalf("output = %q, want %q", output.String(), want)
 	}
 }
 

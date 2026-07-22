@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,7 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/ZhiWei-Ou/xserial/internal/session"
+	"github.com/ZhiWei-Ou/xserial/internal/middleware"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -31,7 +30,7 @@ type Frontend struct{ cfg Config }
 
 func New(cfg Config) *Frontend { return &Frontend{cfg: cfg} }
 
-func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) error {
+func (f *Frontend) Run(ctx context.Context, endpoint middleware.Endpoint) error {
 	if f.cfg.Input == nil {
 		return errors.New("TUI input is nil")
 	}
@@ -50,26 +49,18 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) error {
 	return nil
 }
 
-type displayMode int
-
-const (
-	modeText displayMode = iota
-	modeHex
-)
-
 type transferMode int
 
 const (
 	transferNone transferMode = iota
 	transferRawUpload
-	transferYMODEMUpload
-	transferYMODEMDownload
 )
 
-type endpointEventMsg struct{ event session.Event }
+type endpointEventMsg struct{ event middleware.Event }
 type endpointClosedMsg struct{}
 type sendResultMsg struct {
-	bytes int
+	data  []byte
+	at    time.Time
 	err   error
 	input []rune
 }
@@ -81,26 +72,11 @@ type command struct {
 }
 
 var commands = []command{
-	{label: "Toggle Text / Hex mode", enabled: func(m *model) bool { return !m.transferring }, run: func(m *model) tea.Cmd { m.switchMode(); return nil }},
-	{label: "Upload raw file", enabled: func(m *model) bool { return !m.transferring }, run: func(m *model) tea.Cmd {
+	{label: "Send raw file", enabled: func(m *model) bool { return m.connected && !m.transferring }, run: func(m *model) tea.Cmd {
 		m.pathMode, m.input, m.status = transferRawUpload, nil, "Enter a local file path for raw upload"
 		return nil
 	}},
-	{label: "Upload with YMODEM", enabled: func(m *model) bool { return !m.transferring }, run: func(m *model) tea.Cmd {
-		m.pathMode, m.input, m.status = transferYMODEMUpload, nil, "Enter a local file path for YMODEM upload"
-		return nil
-	}},
-	{label: "Download with YMODEM", enabled: func(m *model) bool { return !m.transferring }, run: func(m *model) tea.Cmd {
-		m.input = nil
-		if err := m.endpoint.StartYMODEMDownload(context.Background(), "."); err != nil {
-			m.status = fmt.Sprintf("YMODEM download failed: %v", err)
-			return nil
-		}
-		m.transferMode, m.transferring = transferYMODEMDownload, true
-		m.status = "Waiting for YMODEM sender…"
-		return nil
-	}},
-	{label: "Clear transcript", run: func(m *model) tea.Cmd { m.clearTranscript(); return nil }},
+	{label: "Clear traffic", run: func(m *model) tea.Cmd { m.clearTranscript(); return nil }},
 	{label: "Cancel transfer", enabled: func(m *model) bool { return m.transferring }, run: func(m *model) tea.Cmd {
 		m.endpoint.CancelTransfer()
 		m.status = "Canceling transfer…"
@@ -110,7 +86,7 @@ var commands = []command{
 }
 
 type model struct {
-	endpoint     session.Endpoint
+	endpoint     middleware.Endpoint
 	timeFormat   string
 	portName     string
 	baud         int
@@ -118,13 +94,11 @@ type model struct {
 	width        int
 	height       int
 	lines        []string
-	currentLine  string
-	currentAt    time.Time
-	mode         displayMode
 	input        []rune
 	pathMode     transferMode
 	transferMode transferMode
 	transferring bool
+	connected    bool
 	palette      bool
 	paletteIndex int
 	status       string
@@ -132,25 +106,20 @@ type model struct {
 	rxBytes      int64
 	txBytes      int64
 	err          error
-	pendingCR    bool
-
-	escapeKind byte
-	escapeBuf  []byte
-	activeSGR  string
-	hexBytes   []byte
-	hexOffset  int64
+	history      []string
+	historyIndex int
 }
 
-func newModel(endpoint session.Endpoint, cfg Config) *model {
+func newModel(endpoint middleware.Endpoint, cfg Config) *model {
 	return &model{
 		endpoint: endpoint, timeFormat: cfg.TimeFormat, portName: cfg.PortName,
-		baud: cfg.Baud, frame: cfg.Frame, status: "Ready — Text mode",
+		baud: cfg.Baud, frame: cfg.Frame, connected: true, status: "Ready — enter Hex bytes",
 	}
 }
 
 func (m *model) Init() tea.Cmd { return waitEvent(m.endpoint.Events()) }
 
-func waitEvent(events <-chan session.Event) tea.Cmd {
+func waitEvent(events <-chan middleware.Event) tea.Cmd {
 	return func() tea.Msg {
 		event, ok := <-events
 		if !ok {
@@ -171,7 +140,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleEvent(msg.event)
 		return m, waitEvent(m.endpoint.Events())
 	case sendResultMsg:
-		if errors.Is(msg.err, session.ErrDisconnected) {
+		if errors.Is(msg.err, middleware.ErrDisconnected) {
 			if len(m.input) == 0 {
 				m.input = append([]rune(nil), msg.input...)
 			}
@@ -182,8 +151,17 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.status = fmt.Sprintf("Send failed: %v", msg.err)
 		} else {
-			m.txBytes += int64(msg.bytes)
-			m.status = fmt.Sprintf("Sent %d bytes", msg.bytes)
+			m.txBytes += int64(len(msg.data))
+			m.appendTraffic("TX", msg.data, msg.at)
+			canonical := formatHexInput(msg.data)
+			if len(m.history) == 0 || m.history[len(m.history)-1] != canonical {
+				m.history = append(m.history, canonical)
+			}
+			if len(m.history) > 100 {
+				m.history = append([]string(nil), m.history[len(m.history)-100:]...)
+			}
+			m.historyIndex = len(m.history)
+			m.status = fmt.Sprintf("Sent %d bytes", len(msg.data))
 		}
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -191,20 +169,21 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *model) handleEvent(event session.Event) {
+func (m *model) handleEvent(event middleware.Event) {
 	switch event := event.(type) {
-	case session.Disconnected:
+	case middleware.Disconnected:
+		m.connected = false
 		m.status = fmt.Sprintf("Serial port disconnected: %v — retrying…", event.Err)
-	case session.Reconnected:
+	case middleware.Reconnecting:
+		m.connected = false
+		m.status = fmt.Sprintf("Reconnecting — attempt %d/%d", event.Attempt, event.Limit)
+	case middleware.Reconnected:
+		m.connected = true
 		m.status = "Serial port reconnected"
-	case session.Received:
+	case middleware.Received:
 		atBottom := m.scroll == 0
 		before := len(m.visualLines(m.transcriptWidth()))
-		if m.mode == modeHex {
-			m.appendHex(event.Data, event.At)
-		} else {
-			m.appendText(event.Data, event.At)
-		}
+		m.appendTraffic("RX", event.Data, event.At)
 		m.rxBytes += int64(len(event.Data))
 		m.trimTranscript()
 		if !atBottom {
@@ -212,48 +191,18 @@ func (m *model) handleEvent(event session.Event) {
 			m.scroll += after - before
 		}
 		m.clampScroll()
-	case session.UploadStarted:
+	case middleware.UploadStarted:
 		m.transferMode, m.transferring = transferRawUpload, true
 		m.status = fmt.Sprintf("Uploading %s…", event.Path)
-	case session.UploadProgress:
+	case middleware.UploadProgress:
 		m.status = fmt.Sprintf("Uploading %s — %s / %s", event.Path, formatBytes(event.Written), formatBytes(event.Total))
-	case session.UploadFinished:
+	case middleware.UploadFinished:
 		m.transferMode, m.transferring = transferNone, false
 		if event.Err != nil {
 			m.status = fmt.Sprintf("Upload failed: %v", event.Err)
 		} else {
 			m.txBytes += event.Bytes
 			m.status = fmt.Sprintf("Uploaded %s (%s)", event.Path, formatBytes(event.Bytes))
-		}
-		event.Acknowledge()
-	case session.YMODEMProgress:
-		m.transferring = true
-		if event.Direction == "download" {
-			m.transferMode = transferYMODEMDownload
-		} else {
-			m.transferMode = transferYMODEMUpload
-		}
-		m.status = fmt.Sprintf("YMODEM %s — %s / %s", event.Direction, formatBytes(event.Written), formatBytes(event.Total))
-	case session.YMODEMFrameRetry:
-		m.status = fmt.Sprintf("YMODEM %s retry — block %d, attempt %d: %s", event.Direction, event.Block, event.Attempt, event.Reason)
-		event.Acknowledge()
-	case session.YMODEMFinished:
-		m.transferMode, m.transferring = transferNone, false
-		stats := fmt.Sprintf(
-			"CRC32 %08x — failed %d, retried %d",
-			event.CRC32, event.FailedFrames, event.RetriedFrames,
-		)
-		if errors.Is(event.Err, context.Canceled) {
-			m.status = fmt.Sprintf("YMODEM %s canceled — %s", event.Direction, stats)
-		} else if event.Err != nil {
-			m.status = fmt.Sprintf("YMODEM %s failed: %v — %s", event.Direction, event.Err, stats)
-		} else {
-			if event.Direction == "download" {
-				m.rxBytes += event.Bytes
-			} else {
-				m.txBytes += event.Bytes
-			}
-			m.status = fmt.Sprintf("YMODEM %s complete — %s (%s) — %s", event.Direction, event.Path, formatBytes(event.Bytes), stats)
 		}
 		event.Acknowledge()
 	}
@@ -286,12 +235,21 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch key {
 	case "up":
-		m.scroll++
-		m.clampScroll()
+		if len(m.history) > 0 {
+			if m.historyIndex > 0 {
+				m.historyIndex--
+			}
+			m.input = []rune(m.history[m.historyIndex])
+		}
 		return m, nil
 	case "down":
-		if m.scroll > 0 {
-			m.scroll--
+		if m.historyIndex < len(m.history) {
+			m.historyIndex++
+			if m.historyIndex == len(m.history) {
+				m.input = nil
+			} else {
+				m.input = []rune(m.history[m.historyIndex])
+			}
 		}
 		return m, nil
 	case "pgup":
@@ -344,42 +302,22 @@ func (m *model) handlePalette(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *model) switchMode() {
-	m.finishCurrent()
-	m.activeSGR = ""
-	m.resetEscape()
-	m.pendingCR = false
-	if m.mode == modeText {
-		m.mode = modeHex
-		m.status = "Hex mode — enter two-digit bytes separated by spaces"
-	} else {
-		m.mode = modeText
-		m.status = "Text mode"
-	}
-	m.input = nil
-}
-
 func (m *model) clearTranscript() {
-	m.lines, m.currentLine, m.hexBytes = nil, "", nil
-	m.activeSGR = ""
-	m.resetEscape()
-	m.pendingCR = false
+	m.lines = nil
 	m.scroll = 0
 	m.status = "Transcript cleared"
 }
 
 func (m *model) sendInput() (tea.Model, tea.Cmd) {
+	if !m.connected {
+		m.status = "Serial port is disconnected"
+		return m, nil
+	}
 	originalInput := append([]rune(nil), m.input...)
-	var data []byte
-	if m.mode == modeHex {
-		parsed, err := parseHexInput(string(m.input))
-		if err != nil {
-			m.status = fmt.Sprintf("Invalid hex: %v", err)
-			return m, nil
-		}
-		data = parsed
-	} else {
-		data = append([]byte(string(m.input)), '\r')
+	data, err := parseHexInput(string(m.input))
+	if err != nil {
+		m.status = fmt.Sprintf("Invalid hex: %v", err)
+		return m, nil
 	}
 	if len(data) == 0 {
 		m.status = "Nothing to send"
@@ -388,27 +326,44 @@ func (m *model) sendInput() (tea.Model, tea.Cmd) {
 	m.input = nil
 	return m, func() tea.Msg {
 		err := m.endpoint.Send(context.Background(), data)
-		return sendResultMsg{bytes: len(data), err: err, input: originalInput}
+		return sendResultMsg{data: append([]byte(nil), data...), at: time.Now(), err: err, input: originalInput}
 	}
 }
 
 func parseHexInput(input string) ([]byte, error) {
-	fields := strings.Fields(input)
+	fields := strings.Fields(strings.ReplaceAll(input, ",", " "))
 	if len(fields) == 0 {
 		return nil, nil
 	}
-	data := make([]byte, len(fields))
-	for i, field := range fields {
-		if len(field) != 2 {
-			return nil, fmt.Errorf("%q must contain exactly two digits", field)
+	var data []byte
+	for _, field := range fields {
+		if strings.HasPrefix(strings.ToLower(field), "0x") {
+			field = field[2:]
+			if len(field) != 2 {
+				return nil, fmt.Errorf("0x value %q must contain exactly two digits", field)
+			}
 		}
-		value, err := strconv.ParseUint(field, 16, 8)
-		if err != nil {
-			return nil, fmt.Errorf("%q is not a byte", field)
+		if len(field)%2 != 0 {
+			return nil, fmt.Errorf("%q contains an odd number of digits", field)
 		}
-		data[i] = byte(value)
+		for i := 0; i < len(field); i += 2 {
+			pair := field[i : i+2]
+			value, err := strconv.ParseUint(pair, 16, 8)
+			if err != nil {
+				return nil, fmt.Errorf("%q is not Hex", pair)
+			}
+			data = append(data, byte(value))
+		}
 	}
 	return data, nil
+}
+
+func formatHexInput(data []byte) string {
+	parts := make([]string, len(data))
+	for i, value := range data {
+		parts[i] = fmt.Sprintf("%02X", value)
+	}
+	return strings.Join(parts, " ")
 }
 
 func (m *model) startFileTransfer() (tea.Model, tea.Cmd) {
@@ -421,12 +376,7 @@ func (m *model) startFileTransfer() (tea.Model, tea.Cmd) {
 	mode := m.pathMode
 	m.pathMode = transferNone
 	m.input = nil
-	var err error
-	if mode == transferYMODEMUpload {
-		err = m.endpoint.StartYMODEMUpload(context.Background(), path)
-	} else {
-		err = m.endpoint.StartUpload(context.Background(), path)
-	}
+	err := m.endpoint.StartUpload(context.Background(), path)
 	if err != nil {
 		m.status = fmt.Sprintf("Transfer failed: %v", err)
 		return m, nil
@@ -440,132 +390,20 @@ func (m transferMode) label() string {
 	switch m {
 	case transferRawUpload:
 		return "raw upload"
-	case transferYMODEMUpload:
-		return "YMODEM upload"
-	case transferYMODEMDownload:
-		return "YMODEM download"
 	default:
 		return "transfer"
 	}
 }
 
-func (m *model) appendText(data []byte, at time.Time) {
-	if m.currentLine == "" {
-		m.currentAt = at
-		m.currentLine = m.linePrefix(at) + m.activeSGR
+func (m *model) appendTraffic(direction string, data []byte, at time.Time) {
+	for offset := 0; offset < len(data); offset += 16 {
+		end := min(len(data), offset+16)
+		m.lines = append(m.lines, m.linePrefix(at)+formatTrafficLine(direction, data[offset:end]))
 	}
-	for _, b := range data {
-		if m.pendingCR {
-			m.pendingCR = false
-			if b == '\n' {
-				m.finishCurrent()
-				continue
-			}
-			m.resetCurrentLine(at)
-		}
-		if m.consumeEscape(b) {
-			continue
-		}
-		switch b {
-		case '\n':
-			m.finishCurrent()
-		case '\r':
-			m.pendingCR = true
-		case '\t':
-			m.currentLine += "    "
-		default:
-			if b >= 0x20 && b != 0x7f {
-				m.currentLine += string([]byte{b})
-			}
-		}
-	}
+	m.trimTranscript()
 }
 
-func (m *model) resetCurrentLine(at time.Time) {
-	m.currentAt = at
-	m.currentLine = m.linePrefix(at) + m.activeSGR
-}
-
-func (m *model) consumeEscape(b byte) bool {
-	if m.escapeKind == 0 {
-		if b == 0x1b {
-			m.escapeKind = 'e'
-			m.escapeBuf = []byte{b}
-			return true
-		}
-		return false
-	}
-	m.escapeBuf = append(m.escapeBuf, b)
-	switch m.escapeKind {
-	case 'e':
-		switch b {
-		case '[':
-			m.escapeKind = '['
-		case ']', 'P', '_', '^', 'X':
-			m.escapeKind = b
-		default:
-			m.resetEscape()
-		}
-	case '[':
-		if b >= 0x40 && b <= 0x7e {
-			if b == 'm' && validSGR(m.escapeBuf) {
-				seq := string(m.escapeBuf)
-				m.currentLine += seq
-				if seq == "\x1b[m" || seq == "\x1b[0m" {
-					m.activeSGR = ""
-				} else {
-					m.activeSGR += seq
-				}
-			} else if b == 'K' && erasesWholeLine(m.escapeBuf) {
-				m.resetCurrentLine(m.currentAt)
-			}
-			m.resetEscape()
-		}
-	case ']', 'P', '_', '^', 'X':
-		if (m.escapeKind == ']' && b == 0x07) || (len(m.escapeBuf) >= 2 && m.escapeBuf[len(m.escapeBuf)-2] == 0x1b && b == '\\') {
-			m.resetEscape()
-		}
-	}
-	if len(m.escapeBuf) > 1024 {
-		m.resetEscape()
-	}
-	return true
-}
-
-func erasesWholeLine(seq []byte) bool {
-	return bytes.Equal(seq, []byte("\x1b[2K"))
-}
-
-func validSGR(seq []byte) bool {
-	if len(seq) < 3 || seq[0] != 0x1b || seq[1] != '[' || seq[len(seq)-1] != 'm' {
-		return false
-	}
-	for _, b := range seq[2 : len(seq)-1] {
-		if (b < '0' || b > '9') && b != ';' && b != ':' {
-			return false
-		}
-	}
-	return true
-}
-
-func (m *model) resetEscape() { m.escapeKind, m.escapeBuf = 0, nil }
-
-func (m *model) appendHex(data []byte, at time.Time) {
-	for i, b := range data {
-		if len(m.hexBytes) == 0 {
-			m.hexOffset = m.rxBytes + int64(i)
-			m.currentAt = at
-		}
-		m.hexBytes = append(m.hexBytes, b)
-		m.currentLine = m.linePrefix(m.currentAt) + formatHexLine(m.hexOffset, m.hexBytes)
-		if len(m.hexBytes) == 16 {
-			m.finishCurrent()
-			m.hexBytes = nil
-		}
-	}
-}
-
-func formatHexLine(offset int64, data []byte) string {
+func formatTrafficLine(direction string, data []byte) string {
 	var hexPart strings.Builder
 	var asciiPart strings.Builder
 	for i := 0; i < 16; i++ {
@@ -584,7 +422,7 @@ func formatHexLine(offset int64, data []byte) string {
 			hexPart.WriteByte(' ')
 		}
 	}
-	return fmt.Sprintf("%08X  %s |%s|", offset, hexPart.String(), asciiPart.String())
+	return fmt.Sprintf("%-2s %4d B  %s |%s|", direction, len(data), hexPart.String(), asciiPart.String())
 }
 
 func (m *model) linePrefix(at time.Time) string {
@@ -592,14 +430,6 @@ func (m *model) linePrefix(at time.Time) string {
 		return ""
 	}
 	return "[" + at.Format(m.timeFormat) + "] "
-}
-
-func (m *model) finishCurrent() {
-	if m.currentLine != "" {
-		m.lines = append(m.lines, m.currentLine+"\x1b[0m")
-	}
-	m.currentLine = ""
-	m.hexBytes = nil
 }
 
 func (m *model) trimTranscript() {
@@ -616,7 +446,7 @@ func (m *model) View() tea.View {
 	if height < 12 {
 		height = 12
 	}
-	header := titleStyle.Render("  XSERIAL") + "  " + badgeStyle.Render("CONNECTED") +
+	header := titleStyle.Render("  XSERIAL") + "  " + badgeStyle.Render(m.connectionName()) +
 		metaStyle.Render(fmt.Sprintf("  %s  •  %d baud  •  %s", m.portName, m.baud, m.frame))
 	stats := metaStyle.Render("  RX ") + valueStyle.Render(formatBytes(m.rxBytes)) +
 		metaStyle.Render("   TX ") + valueStyle.Render(formatBytes(m.txBytes)) +
@@ -625,10 +455,19 @@ func (m *model) View() tea.View {
 	panelContent := m.renderTranscript(m.transcriptWidthFor(width), m.transcriptHeightFor(height))
 	panel := panelStyle.Width(width).Render(panelContent)
 	prompt := m.modeName() + " › "
+	displayInput := string(m.input)
+	if m.pathMode == transferNone {
+		if parsed, err := parseHexInput(displayInput); err == nil {
+			displayInput = formatHexInput(parsed)
+			prompt = fmt.Sprintf("Hex (%d B) › ", len(parsed))
+		} else {
+			prompt = "Hex (!invalid) › "
+		}
+	}
 	if m.pathMode != transferNone {
 		prompt = m.pathMode.label() + " › "
 	}
-	input := promptStyle.Render(prompt) + string(m.input)
+	input := promptStyle.Render(prompt) + displayInput
 	if !m.transferring {
 		input += valueStyle.Render("▏")
 	}
@@ -636,7 +475,7 @@ func (m *model) View() tea.View {
 	if m.err != nil {
 		status = errorStyle.Render(m.err.Error())
 	}
-	footer := footerStyle.Render("Ctrl+P commands  •  ↑/↓ scroll  •  Ctrl+C quit")
+	footer := footerStyle.Render("Ctrl+P commands  •  ↑/↓ history  •  PgUp/PgDn scroll  •  Ctrl+C quit")
 	content := strings.Join([]string{
 		fitLine(header, width), fitLine(stats, width), panel,
 		fitLine(input, width), fitLine(status, width), fitLine(footer, width),
@@ -660,10 +499,14 @@ func (m *model) View() tea.View {
 }
 
 func (m *model) modeName() string {
-	if m.mode == modeHex {
-		return "Hex"
+	return "Hex"
+}
+
+func (m *model) connectionName() string {
+	if m.connected {
+		return "CONNECTED"
 	}
-	return "Text"
+	return "RECONNECTING"
 }
 
 func (m *model) transcriptWidth() int               { return m.transcriptWidthFor(max(20, m.width)) }
@@ -687,9 +530,6 @@ func (m *model) renderTranscript(width, height int) string {
 
 func (m *model) visualLines(width int) []string {
 	logical := append([]string(nil), m.lines...)
-	if m.currentLine != "" {
-		logical = append(logical, m.currentLine+"\x1b[0m")
-	}
 	var visual []string
 	for _, line := range logical {
 		wrapped := ansi.Hardwrap(line, width, false)
@@ -763,4 +603,4 @@ var (
 	errorStyle   = lipgloss.NewStyle().Foreground(red).Bold(true)
 )
 
-var _ session.Frontend = (*Frontend)(nil)
+var _ middleware.Frontend = (*Frontend)(nil)

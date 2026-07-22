@@ -1,4 +1,4 @@
-package session
+package middleware
 
 import (
 	"bytes"
@@ -89,6 +89,28 @@ func TestSessionRoutesFrontendWritesThroughFullWriter(t *testing.T) {
 	}
 }
 
+func TestSessionComposesConfiguredHandlers(t *testing.T) {
+	port := newBlockingPort()
+	handler := testHandler{name: "suffix", outbound: func(envelope Envelope) (Action, error) {
+		envelope.Data = append(envelope.Data, 0xff)
+		return Forward(envelope), nil
+	}}
+	frontend := frontendFunc(func(ctx context.Context, endpoint Endpoint) error {
+		if err := endpoint.Send(ctx, []byte{0x01}); err != nil {
+			return err
+		}
+		endpoint.Quit()
+		return nil
+	})
+
+	if err := New(Config{Port: port, Frontend: frontend, Handlers: []Handler{handler}}).Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := []byte(port.Written()); !bytes.Equal(got, []byte{0x01, 0xff}) {
+		t.Fatalf("serial output = %v", got)
+	}
+}
+
 func TestSessionRecordsAndDeliversRawReceivedBytes(t *testing.T) {
 	want := []byte{'a', 0, 'b', '\n'}
 	port := &fakePort{read: bytes.NewBuffer(want)}
@@ -117,6 +139,7 @@ func TestSessionReturnsSerialErrorAfterFrontendStops(t *testing.T) {
 	port := &errorPort{err: want}
 	frontendStopped := make(chan struct{})
 	frontend := frontendFunc(func(ctx context.Context, endpoint Endpoint) error {
+		_ = endpoint.Events()
 		<-ctx.Done()
 		close(frontendStopped)
 		return nil
@@ -146,6 +169,7 @@ func TestSessionReconnectsAfterSuccessfulInitialConnection(t *testing.T) {
 		return second, nil
 	}
 	frontend := frontendFunc(func(ctx context.Context, endpoint Endpoint) error {
+		_ = endpoint.Events()
 		for {
 			select {
 			case event := <-logger.notifications:
@@ -186,6 +210,7 @@ func TestSessionQuitCancelsReconnectWait(t *testing.T) {
 	logger := newRecordingLogger()
 	var attempts atomic.Int32
 	frontend := frontendFunc(func(ctx context.Context, endpoint Endpoint) error {
+		_ = endpoint.Events()
 		for event := range logger.notifications {
 			if event == "session.disconnected" {
 				endpoint.Quit()

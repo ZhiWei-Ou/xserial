@@ -84,6 +84,9 @@ func TestConnExposesReceiveLog(t *testing.T) {
 	if timeFlag.DefValue != "" {
 		t.Fatalf("--time default = %q, want empty", timeFlag.DefValue)
 	}
+	if timeFlag.NoOptDefVal != defaultReceiveTimeFormat {
+		t.Fatalf("--time no-argument value = %q, want %q", timeFlag.NoOptDefVal, defaultReceiveTimeFormat)
+	}
 	if flag := cmd.Flags().Lookup("log-time-format"); flag != nil {
 		t.Fatal("legacy --log-time-format flag exists, want nil")
 	}
@@ -91,6 +94,29 @@ func TestConnExposesReceiveLog(t *testing.T) {
 		t.Fatal("--tui flag not found")
 	} else if flag.DefValue != "false" {
 		t.Fatalf("--tui default = %q, want false", flag.DefValue)
+	}
+	if flag := cmd.Flags().Lookup("reconnect"); flag == nil {
+		t.Fatal("--reconnect flag not found")
+	} else if flag.DefValue != "5" {
+		t.Fatalf("--reconnect default = %q, want 5", flag.DefValue)
+	}
+}
+
+func TestConnTimeFlagAcceptsOmittedOrExplicitFormat(t *testing.T) {
+	cmd := NewConnCommand()
+	if err := cmd.ParseFlags([]string{"--time"}); err != nil {
+		t.Fatalf("ParseFlags(--time) error = %v", err)
+	}
+	if got := cmd.Flags().Lookup("time").Value.String(); got != defaultReceiveTimeFormat {
+		t.Fatalf("--time value = %q, want %q", got, defaultReceiveTimeFormat)
+	}
+
+	cmd = NewConnCommand()
+	if err := cmd.ParseFlags([]string{"--time=2006-01-02 15:04:05"}); err != nil {
+		t.Fatalf("ParseFlags(--time=format) error = %v", err)
+	}
+	if got := cmd.Flags().Lookup("time").Value.String(); got != "2006-01-02 15:04:05" {
+		t.Fatalf("--time value = %q", got)
 	}
 }
 
@@ -121,7 +147,7 @@ func TestParseConnOptionsUsesScreenStyleDefaults(t *testing.T) {
 		t.Fatalf("parseConnOptions() error = %v", err)
 	}
 
-	if opts.port != "/dev/ttyUSB0" || opts.baud != 115200 || opts.dataBits != 8 || opts.parity != "none" || opts.stopBits != "1" {
+	if opts.port != "/dev/ttyUSB0" || opts.baud != 115200 || opts.dataBits != 8 || opts.parity != "none" || opts.stopBits != "1" || opts.reconnectAttempts != 5 {
 		t.Fatalf("parseConnOptions() = %#v, want /dev/ttyUSB0 115200 8N1", opts)
 	}
 }

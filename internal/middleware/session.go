@@ -1,4 +1,4 @@
-package session
+package middleware
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZhiWei-Ou/xserial/internal/backend"
+	"github.com/ZhiWei-Ou/xserial/internal/linetime"
 	"github.com/ZhiWei-Ou/xserial/internal/transfer"
 )
 
@@ -45,6 +47,14 @@ func (Disconnected) isSessionEvent() {}
 type Reconnected struct{}
 
 func (Reconnected) isSessionEvent() {}
+
+type Reconnecting struct {
+	Attempt int
+	Limit   int
+	Err     error
+}
+
+func (Reconnecting) isSessionEvent() {}
 
 type UploadStarted struct {
 	Path string
@@ -146,10 +156,12 @@ type Config struct {
 	Port              SerialPort
 	Reconnect         func() (SerialPort, error)
 	ReconnectInterval time.Duration
+	ReconnectAttempts int
 	Frontend          Frontend
 	ReceiveLog        io.Writer
 	ReceiveTimeFormat string
 	Logger            Logger
+	Handlers          []Handler
 }
 
 type Session struct {
@@ -158,17 +170,15 @@ type Session struct {
 
 func New(cfg Config) *Session { return &Session{cfg: cfg} }
 
-type writeRequest struct {
-	data []byte
-	done chan error
-}
-
 type endpoint struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	events chan Event
-	writes chan writeRequest
-	logger Logger
+	ctx       context.Context
+	cancel    context.CancelFunc
+	events    chan Event
+	ready     chan struct{}
+	readyOnce sync.Once
+	logger    Logger
+	backend   *backend.Endpoint
+	pipeline  *Pipeline
 
 	mu                    sync.Mutex
 	stopping              bool
@@ -176,15 +186,47 @@ type endpoint struct {
 	transferConsumesInput bool
 	transferCancel        context.CancelFunc
 	transferInput         chan []byte
+	transferHandlerName   string
 	workers               sync.WaitGroup
-	portMu                sync.RWMutex
-	port                  SerialPort
-	portGeneration        uint64
 }
 
-func (e *endpoint) Events() <-chan Event { return e.events }
+func (e *endpoint) Events() <-chan Event {
+	e.markReady()
+	return e.events
+}
+
+func (e *endpoint) markReady() { e.readyOnce.Do(func() { close(e.ready) }) }
+
+type transferGate struct {
+	name   string
+	duplex bool
+	input  chan<- []byte
+	done   <-chan struct{}
+}
+
+func (g *transferGate) Name() string { return g.name }
+func (g *transferGate) Capability() Capability {
+	if g.duplex {
+		return ExclusiveDuplex
+	}
+	return ExclusiveOutbound
+}
+func (g *transferGate) HandleInbound(ctx context.Context, envelope Envelope) (Action, error) {
+	if !g.duplex {
+		return Forward(envelope), nil
+	}
+	select {
+	case g.input <- append([]byte(nil), envelope.Data...):
+		return Consume(), nil
+	case <-g.done:
+		return Consume(), nil
+	case <-ctx.Done():
+		return Action{}, ctx.Err()
+	}
+}
 
 func (e *endpoint) Send(ctx context.Context, data []byte) error {
+	e.markReady()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.stopping {
@@ -197,21 +239,27 @@ func (e *endpoint) Send(ctx context.Context, data []byte) error {
 }
 
 func (e *endpoint) write(ctx context.Context, data []byte) error {
-	req := writeRequest{data: append([]byte(nil), data...), done: make(chan error, 1)}
-	select {
-	case e.writes <- req:
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-e.ctx.Done():
-		return context.Canceled
-	}
-	select {
-	case err := <-req.done:
+	return e.writeFrom(ctx, "frontend", data)
+}
+
+func (e *endpoint) writeTransfer(ctx context.Context, data []byte) error {
+	return e.writeFrom(ctx, "transfer.active", data)
+}
+
+func (e *endpoint) writeFrom(ctx context.Context, source string, data []byte) error {
+	envelope, err := e.pipeline.ProcessOutbound(ctx, Envelope{
+		Data: data, Source: source, At: time.Now(),
+	})
+	if err != nil {
+		if errors.Is(err, ErrDirectionBusy) {
+			return ErrTransferActive
+		}
 		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-e.ctx.Done():
-		return context.Canceled
+	}
+	if err := e.backend.Send(ctx, envelope.Data); errors.Is(err, backend.ErrDisconnected) {
+		return fmt.Errorf("%w: %w", ErrDisconnected, err)
+	} else {
+		return err
 	}
 }
 
@@ -253,8 +301,20 @@ func (e *endpoint) startTransfer(ctx context.Context, consumesInput bool, run fu
 	if consumesInput {
 		e.transferInput = make(chan []byte, 32)
 	}
+	gate := &transferGate{name: "transfer.active", duplex: consumesInput, input: e.transferInput, done: transferCtx.Done()}
+	if err := e.pipeline.Add(ctx, gate); err != nil {
+		cancel()
+		e.transferActive = false
+		e.transferConsumesInput = false
+		e.transferCancel = nil
+		e.transferInput = nil
+		e.mu.Unlock()
+		return err
+	}
+	e.transferHandlerName = gate.name
 	e.workers.Add(1)
 	e.mu.Unlock()
+	e.markReady()
 
 	go func() {
 		defer e.workers.Done()
@@ -267,7 +327,7 @@ func (e *endpoint) runUpload(ctx context.Context, path string) {
 	e.emit(UploadStarted{Path: path})
 
 	lastProgress := time.Time{}
-	n, err := transfer.UploadRawFile(ctx, path, writerFunc(e.write), func(written, total int64) {
+	n, err := transfer.UploadRawFile(ctx, path, writerFunc(e.writeTransfer), func(written, total int64) {
 		now := time.Now()
 		if written != total && now.Sub(lastProgress) < 100*time.Millisecond {
 			return
@@ -375,11 +435,16 @@ func (e *endpoint) waitForAcknowledgement(ctx context.Context, acknowledged <-ch
 
 func (e *endpoint) finishTransfer() {
 	e.mu.Lock()
+	handlerName := e.transferHandlerName
 	e.transferActive = false
 	e.transferConsumesInput = false
 	e.transferCancel = nil
 	e.transferInput = nil
+	e.transferHandlerName = ""
 	e.mu.Unlock()
+	if handlerName != "" {
+		_ = e.pipeline.Remove(context.Background(), handlerName)
+	}
 }
 
 type writerFunc func(context.Context, []byte) error
@@ -415,7 +480,7 @@ func (s *transferStream) Read(data []byte) (int, error) {
 }
 
 func (s *transferStream) Write(data []byte) (int, error) {
-	if err := s.endpoint.write(s.ctx, data); err != nil {
+	if err := s.endpoint.writeTransfer(s.ctx, data); err != nil {
 		return 0, err
 	}
 	return len(data), nil
@@ -430,19 +495,9 @@ func (e *endpoint) CancelTransfer() {
 	}
 }
 
-func (e *endpoint) Quit() { e.cancel() }
-
-func (e *endpoint) connection() (SerialPort, uint64) {
-	e.portMu.RLock()
-	defer e.portMu.RUnlock()
-	return e.port, e.portGeneration
-}
-
-func (e *endpoint) setConnection(port SerialPort, generation uint64) {
-	e.portMu.Lock()
-	e.port = port
-	e.portGeneration = generation
-	e.portMu.Unlock()
+func (e *endpoint) Quit() {
+	e.markReady()
+	e.cancel()
 }
 
 func (e *endpoint) emit(event Event) bool {
@@ -485,28 +540,63 @@ func (s *Session) Run(parent context.Context) error {
 	}
 
 	ctx, cancel := context.WithCancel(parent)
-	e := &endpoint{
-		ctx: ctx, cancel: cancel, events: make(chan Event, 32),
-		writes: make(chan writeRequest), logger: s.cfg.Logger,
+	pipeline, err := NewPipeline(s.cfg.Handlers...)
+	if err != nil {
+		cancel()
+		return err
 	}
-	e.setConnection(s.cfg.Port, 1)
-
-	failures := make(chan connectionFailure, 2)
-	writerDone := make(chan error, 1)
-	go func() { writerDone <- s.runWriter(ctx, e, failures) }()
-	connectionDone := make(chan error, 1)
-	go func() { connectionDone <- s.runConnections(ctx, e, failures) }()
+	attempts := s.cfg.ReconnectAttempts
+	if attempts == 0 && s.cfg.Reconnect != nil {
+		attempts = backend.DefaultReconnectAttempts
+	}
+	if attempts < 0 {
+		attempts = 0
+	}
+	backendSession := backend.New(backend.Config{
+		Port: s.cfg.Port,
+		Reconnect: func() (backend.Port, error) {
+			if s.cfg.Reconnect == nil {
+				return nil, ErrDisconnected
+			}
+			return s.cfg.Reconnect()
+		},
+		ReconnectAttempts: attempts,
+		ReconnectInterval: s.cfg.ReconnectInterval,
+	})
+	ready := make(chan *backend.Endpoint, 1)
+	backendDone := make(chan error, 1)
+	go func() { backendDone <- backendSession.Run(ctx, ready) }()
+	var backendEndpoint *backend.Endpoint
+	select {
+	case backendEndpoint = <-ready:
+	case err := <-backendDone:
+		cancel()
+		return normalizeRunError(err)
+	case <-parent.Done():
+		cancel()
+		return nil
+	}
+	e := &endpoint{
+		ctx: ctx, cancel: cancel, events: make(chan Event, 32), logger: s.cfg.Logger,
+		ready: make(chan struct{}), backend: backendEndpoint, pipeline: pipeline,
+	}
+	dispatcherDone := make(chan error, 1)
+	go func() { dispatcherDone <- s.runBackendEvents(ctx, e) }()
 
 	frontendDone := make(chan error, 1)
 	go func() { frontendDone <- s.cfg.Frontend.Run(ctx, e) }()
 
 	var runErr error
-	connectionReturned := false
+	backendReturned := false
+	dispatcherReturned := false
 	frontendReturned := false
 	select {
-	case err := <-connectionDone:
+	case err := <-backendDone:
 		runErr = normalizeRunError(err)
-		connectionReturned = true
+		backendReturned = true
+	case err := <-dispatcherDone:
+		runErr = normalizeRunError(err)
+		dispatcherReturned = true
 	case err := <-frontendDone:
 		runErr = normalizeRunError(err)
 		frontendReturned = true
@@ -514,17 +604,28 @@ func (s *Session) Run(parent context.Context) error {
 	case <-parent.Done():
 	}
 
+	if backendReturned && !dispatcherReturned {
+		if err := <-dispatcherDone; runErr == nil {
+			runErr = normalizeRunError(err)
+		}
+		dispatcherReturned = true
+	}
 	cancel()
 	e.stop()
-	if !connectionReturned {
-		if err := <-connectionDone; runErr == nil {
+	if !backendReturned {
+		if err := <-backendDone; runErr == nil {
 			runErr = normalizeRunError(err)
 		}
 	}
-	if err := <-writerDone; runErr == nil {
-		runErr = normalizeRunError(err)
+	if !dispatcherReturned {
+		if err := <-dispatcherDone; runErr == nil {
+			runErr = normalizeRunError(err)
+		}
 	}
 	e.workers.Wait()
+	if err := pipeline.Close(context.Background()); runErr == nil {
+		runErr = err
+	}
 	close(e.events)
 
 	if !frontendReturned {
@@ -536,79 +637,56 @@ func (s *Session) Run(parent context.Context) error {
 	return runErr
 }
 
-func (s *Session) runWriter(ctx context.Context, e *endpoint, failures chan<- connectionFailure) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Canceled
-		case req := <-e.writes:
-			port, generation := e.connection()
-			if port == nil {
-				req.done <- ErrDisconnected
-				continue
-			}
-			err := transfer.WriteFull(port, req.data)
-			if err != nil {
-				req.done <- fmt.Errorf("%w: %v", ErrDisconnected, err)
-				select {
-				case failures <- connectionFailure{generation: generation, err: fmt.Errorf("write serial port: %w", err)}:
-				case <-ctx.Done():
-					return context.Canceled
-				}
-				continue
-			}
-			req.done <- nil
-		}
+func (s *Session) runBackendEvents(ctx context.Context, e *endpoint) error {
+	select {
+	case <-e.ready:
+	case <-ctx.Done():
+		return context.Canceled
 	}
-}
-
-func (s *Session) runReader(ctx context.Context, e *endpoint, port SerialPort) error {
 	var recorder io.Writer
 	if s.cfg.ReceiveLog != nil {
 		recorder = s.cfg.ReceiveLog
 		if s.cfg.ReceiveTimeFormat != "" {
-			recorder = newLineTimeWriter(recorder, s.cfg.ReceiveTimeFormat)
+			recorder = linetime.NewWriter(recorder, s.cfg.ReceiveTimeFormat)
 		}
 	}
-	buf := make([]byte, 4096)
-	for {
-		n, err := port.Read(buf)
-		if n > 0 {
-			data := append([]byte(nil), buf[:n]...)
+	for event := range e.backend.Events() {
+		switch event := event.(type) {
+		case backend.Received:
 			if recorder != nil {
-				if _, writeErr := recorder.Write(data); writeErr != nil {
-					return fmt.Errorf("record received data: %w", writeErr)
+				if _, err := recorder.Write(event.Data); err != nil {
+					return fmt.Errorf("record received data: %w", err)
 				}
 			}
-			if !e.deliverReceived(ctx, data) {
+			if !e.deliverReceived(ctx, event.Data, event.At) {
 				return context.Canceled
 			}
-		}
-		if err != nil {
-			return fmt.Errorf("read serial port: %w", err)
-		}
-		select {
-		case <-ctx.Done():
-			return context.Canceled
-		default:
+		case backend.Disconnected:
+			e.CancelTransfer()
+			e.logWarn("session.disconnected", "error", event.Err)
+			e.emit(Disconnected{Err: event.Err})
+		case backend.Reconnecting:
+			if event.Attempt > 1 {
+				e.logWarn("session.reconnect_failed", "attempt", event.Attempt-1, "error", event.Err)
+			}
+			e.emit(Reconnecting{Attempt: event.Attempt, Limit: event.Limit, Err: event.Err})
+		case backend.Reconnected:
+			e.logInfo("session.reconnected", "attempt", event.Attempt)
+			e.emit(Reconnected{})
 		}
 	}
+	return nil
 }
 
-func (e *endpoint) deliverReceived(ctx context.Context, data []byte) bool {
-	e.mu.Lock()
-	consumesInput := e.transferConsumesInput
-	input := e.transferInput
-	e.mu.Unlock()
-	if consumesInput {
-		select {
-		case input <- data:
-			return true
-		case <-ctx.Done():
-			return false
-		}
+func (e *endpoint) deliverReceived(ctx context.Context, data []byte, at time.Time) bool {
+	envelope, err := e.pipeline.ProcessInbound(ctx, Envelope{Data: data, Source: "serial", At: at})
+	if errors.Is(err, ErrConsumed) {
+		return true
 	}
-	return e.emit(Received{Data: data, At: time.Now()})
+	if err != nil {
+		return false
+	}
+	return e.emit(Received{Data: envelope.Data, At: envelope.At})
 }
 
 func normalizeRunError(err error) error {

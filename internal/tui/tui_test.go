@@ -10,12 +10,12 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/ZhiWei-Ou/xserial/internal/session"
+	"github.com/ZhiWei-Ou/xserial/internal/middleware"
 	"github.com/charmbracelet/x/ansi"
 )
 
 type fakeEndpoint struct {
-	events         chan session.Event
+	events         chan middleware.Event
 	sent           [][]byte
 	upload         string
 	ymodemUpload   string
@@ -25,8 +25,8 @@ type fakeEndpoint struct {
 	err            error
 }
 
-func newFakeEndpoint() *fakeEndpoint                 { return &fakeEndpoint{events: make(chan session.Event, 8)} }
-func (e *fakeEndpoint) Events() <-chan session.Event { return e.events }
+func newFakeEndpoint() *fakeEndpoint                    { return &fakeEndpoint{events: make(chan middleware.Event, 8)} }
+func (e *fakeEndpoint) Events() <-chan middleware.Event { return e.events }
 func (e *fakeEndpoint) Send(_ context.Context, data []byte) error {
 	e.sent = append(e.sent, append([]byte(nil), data...))
 	return e.err
@@ -46,42 +46,60 @@ func (e *fakeEndpoint) StartYMODEMDownload(_ context.Context, dir string) error 
 func (e *fakeEndpoint) CancelTransfer() { e.canceled = true }
 func (e *fakeEndpoint) Quit()           { e.quit = true }
 
-func TestTextModeSendsLineAndHexModeSendsExactBytes(t *testing.T) {
+func TestHexInputSendsExactBytesAndAddsTXTraffic(t *testing.T) {
 	endpoint := newFakeEndpoint()
 	m := newModel(endpoint, Config{})
-	enterText(t, m, "ver")
+	enterText(t, m, "AA01,ff")
 	_, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	msg := command()
 	m.Update(msg)
-	if got := endpoint.sent[0]; !bytes.Equal(got, []byte("ver\r")) {
-		t.Fatalf("text send = %v", got)
-	}
-
-	m.switchMode()
-	enterText(t, m, "AA 01 ff")
-	_, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	msg = command()
-	m.Update(msg)
-	if got := endpoint.sent[1]; !bytes.Equal(got, []byte{0xaa, 0x01, 0xff}) {
+	if got := endpoint.sent[0]; !bytes.Equal(got, []byte{0xaa, 0x01, 0xff}) {
 		t.Fatalf("hex send = %v", got)
+	}
+	if got := strings.Join(m.lines, "\n"); !strings.Contains(got, "TX") || !strings.Contains(got, "AA 01 FF") {
+		t.Fatalf("traffic=%q", got)
 	}
 }
 
 func TestConnectionEventsUpdateStatus(t *testing.T) {
 	m := newModel(newFakeEndpoint(), Config{})
-	m.handleEvent(session.Disconnected{Err: errors.New("device unplugged")})
-	if !strings.Contains(m.status, "device unplugged") || !strings.Contains(m.status, "retrying") {
+	m.handleEvent(middleware.Disconnected{Err: errors.New("device unplugged")})
+	if m.connected || !strings.Contains(m.status, "device unplugged") || !strings.Contains(m.status, "retrying") {
 		t.Fatalf("disconnected status = %q", m.status)
 	}
+	m.handleEvent(middleware.Reconnecting{Attempt: 2, Limit: 5})
+	if !strings.Contains(m.status, "2/5") {
+		t.Fatalf("reconnecting status=%q", m.status)
+	}
 
-	m.handleEvent(session.Reconnected{})
-	if m.status != "Serial port reconnected" {
+	m.handleEvent(middleware.Reconnected{})
+	if !m.connected || m.status != "Serial port reconnected" {
 		t.Fatalf("reconnected status = %q", m.status)
 	}
 }
 
-func TestHexInputRequiresTwoDigitGroups(t *testing.T) {
-	for _, input := range []string{"A", "0xAA", "AABB", "GG"} {
+func TestDisconnectedTUIDoesNotQueueHexInput(t *testing.T) {
+	endpoint := newFakeEndpoint()
+	m := newModel(endpoint, Config{})
+	m.connected = false
+	enterText(t, m, "AA 01")
+	_, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if command != nil || len(endpoint.sent) != 0 {
+		t.Fatal("disconnected TUI attempted to send")
+	}
+	if string(m.input) != "AA 01" || !strings.Contains(m.status, "disconnected") {
+		t.Fatalf("input=%q status=%q", string(m.input), m.status)
+	}
+}
+
+func TestHexInputAcceptsConvenientFormsAndRejectsInvalidInput(t *testing.T) {
+	for _, input := range []string{"AA 01", "AA01", "AA,01", "0xAA 0x01"} {
+		data, err := parseHexInput(input)
+		if err != nil || !bytes.Equal(data, []byte{0xaa, 0x01}) {
+			t.Fatalf("parseHexInput(%q)=%v,%v", input, data, err)
+		}
+	}
+	for _, input := range []string{"A", "0xAABB", "GG"} {
 		t.Run(input, func(t *testing.T) {
 			if _, err := parseHexInput(input); err == nil {
 				t.Fatalf("parseHexInput(%q) error = nil", input)
@@ -90,43 +108,16 @@ func TestHexInputRequiresTwoDigitGroups(t *testing.T) {
 	}
 }
 
-func TestHexReceiveUsesClassicDumpAndModeOnlyAffectsNewData(t *testing.T) {
+func TestTrafficTimelineShowsReceiveDirectionHexAndASCII(t *testing.T) {
 	m := newModel(newFakeEndpoint(), Config{})
 	at := time.Date(2026, time.July, 10, 12, 0, 0, 0, time.Local)
-	m.handleEvent(session.Received{Data: []byte("text\n"), At: at})
-	m.switchMode()
-	m.handleEvent(session.Received{Data: []byte{0x01, 'A'}, At: at})
+	m.handleEvent(middleware.Received{Data: []byte{0x01, 'A'}, At: at})
 
-	got := strings.Join(append(m.lines, m.currentLine), "\n")
-	for _, want := range []string{"text", "00000005", "01 41", "|.A"} {
+	got := strings.Join(m.lines, "\n")
+	for _, want := range []string{"RX", "01 41", "|.A"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("transcript %q does not contain %q", got, want)
 		}
-	}
-}
-
-func TestTextReceiveKeepsSGRAndFiltersLayoutControls(t *testing.T) {
-	m := newModel(newFakeEndpoint(), Config{})
-	m.handleEvent(session.Received{Data: []byte("\x1b[31mred\x1b[0m\x1b[2J\x1bPpayload\x1b\\ok\n"), At: time.Now()})
-	got := strings.Join(m.lines, "")
-	if !strings.Contains(got, "\x1b[31mred\x1b[0m") {
-		t.Fatalf("SGR color was not preserved: %q", got)
-	}
-	if strings.Contains(got, "\x1b[2J") || strings.Contains(got, "payload") || !strings.Contains(got, "ok") {
-		t.Fatalf("unsafe control filtering failed: %q", got)
-	}
-}
-
-func TestTextReceiveAppliesCarriageReturnRedrawWithoutDuplicatingPrompt(t *testing.T) {
-	m := newModel(newFakeEndpoint(), Config{})
-	m.handleEvent(session.Received{Data: []byte("xsh > lxsh > ls\r\x1b[2Kxsh > "), At: time.Now()})
-	if got := ansi.Strip(m.currentLine); got != "xsh > " {
-		t.Fatalf("current line = %q, want %q", got, "xsh > ")
-	}
-
-	m.handleEvent(session.Received{Data: []byte("result\r\nnext"), At: time.Now()})
-	if got := ansi.Strip(m.lines[len(m.lines)-1]); got != "xsh > result" {
-		t.Fatalf("completed line = %q", got)
 	}
 }
 
@@ -137,58 +128,17 @@ func TestCommandPaletteInvokesRegisteredActions(t *testing.T) {
 	if !m.palette {
 		t.Fatal("palette did not open")
 	}
-	m.paletteIndex = 1
+	m.paletteIndex = 0
 	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	if m.pathMode != transferRawUpload {
 		t.Fatal("upload command did not enter path mode")
 	}
 }
 
-func TestCommandPaletteStartsYMODEMUploadAndDownload(t *testing.T) {
+func TestTUIEscCancelsRawTransfer(t *testing.T) {
 	endpoint := newFakeEndpoint()
 	m := newModel(endpoint, Config{})
-
-	commands[2].run(m)
-	enterText(t, m, "firmware.bin")
-	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	if endpoint.ymodemUpload != "firmware.bin" || !m.transferring || m.transferMode != transferYMODEMUpload {
-		t.Fatalf("upload=%q transferring=%v mode=%v", endpoint.ymodemUpload, m.transferring, m.transferMode)
-	}
-
-	m.transferring, m.transferMode = false, transferNone
-	commands[3].run(m)
-	if endpoint.ymodemDownload != "." || !m.transferring || m.transferMode != transferYMODEMDownload {
-		t.Fatalf("download=%q transferring=%v mode=%v", endpoint.ymodemDownload, m.transferring, m.transferMode)
-	}
-}
-
-func TestTUIShowsYMODEMRetryAndCompletionStats(t *testing.T) {
-	m := newModel(newFakeEndpoint(), Config{})
-	m.handleEvent(session.YMODEMFrameRetry{Direction: "upload", Block: 3, Attempt: 2, Reason: "NAK"})
-	for _, want := range []string{"block 3", "attempt 2", "NAK"} {
-		if !strings.Contains(m.status, want) {
-			t.Fatalf("retry status %q does not contain %q", m.status, want)
-		}
-	}
-
-	m.handleEvent(session.YMODEMFinished{
-		Direction: "download", Path: "firmware.bin", Bytes: 2048, CRC32: 0x1234abcd,
-		FailedFrames: 1, RetriedFrames: 1,
-	})
-	for _, want := range []string{"firmware.bin", "CRC32 1234abcd", "failed 1", "retried 1"} {
-		if !strings.Contains(m.status, want) {
-			t.Fatalf("completion status %q does not contain %q", m.status, want)
-		}
-	}
-	if m.rxBytes != 2048 || m.transferring {
-		t.Fatalf("rx=%d transferring=%v", m.rxBytes, m.transferring)
-	}
-}
-
-func TestTUIEscCancelsYMODEMTransfer(t *testing.T) {
-	endpoint := newFakeEndpoint()
-	m := newModel(endpoint, Config{})
-	m.transferring, m.transferMode = true, transferYMODEMUpload
+	m.transferring, m.transferMode = true, transferRawUpload
 
 	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
 	if !endpoint.canceled || !strings.Contains(m.status, "Canceling") {
@@ -236,13 +186,13 @@ func TestSendErrorLeavesInputForCorrection(t *testing.T) {
 	endpoint := newFakeEndpoint()
 	endpoint.err = errors.New("write failed")
 	m := newModel(endpoint, Config{})
-	enterText(t, m, "retry")
+	enterText(t, m, "AA 01")
 	_, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	if len(m.input) != 0 {
 		t.Fatalf("input was not cleared while send is pending: %q", string(m.input))
 	}
 	m.Update(command())
-	if string(m.input) != "retry" || !strings.Contains(m.status, "write failed") {
+	if string(m.input) != "AA 01" || !strings.Contains(m.status, "write failed") {
 		t.Fatalf("input=%q status=%q", string(m.input), m.status)
 	}
 }

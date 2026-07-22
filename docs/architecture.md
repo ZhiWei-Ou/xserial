@@ -1,99 +1,125 @@
 # xserial 架构
 
-本文描述 xserial 当前代码的实际架构、运行时数据流和扩展边界。xserial 采用按职责分包的模块化单体：命令层负责组装，一套共享会话内核管理串口生命周期，raw 与 TUI 是同一内核之上的两个前端。
+本文描述当前重构后的运行时架构。xserial 是专注于串口的 CLI 工具，采用模块化单体；`rawui` 面向文本或 Shell 设备，`tui` 面向二进制数据收发。
 
-## 1. 系统上下文
-
-xserial 面向终端用户和串口设备。raw 模式强调字节透明；TUI 模式则把设备字节转换为全屏界面中的文本或 Hex 视图。
-
-```mermaid
-flowchart LR
-    User[用户]
-    Terminal[终端 stdin / stdout / stderr]
-    XSerial[xserial]
-    Device[串口设备 / MCU]
-    LogFile[接收日志文件]
-
-    User <--> Terminal
-    Terminal <--> XSerial
-    XSerial <-->|原始串口字节| Device
-    XSerial -->|可选接收记录| LogFile
-```
-
-输出契约：
-
-- raw 模式中，设备字节只写入 `stdout`，不做编码或换行转换；本地帮助、进度和诊断写入 `stderr`。
-- TUI 模式明确使用 `stdout` 绘制全屏界面，设备字节由会话事件交给 TUI 渲染。
-- receive log 由会话内核写入；启用 `--time` 时，时间戳只作用于日志和 TUI 展示，不改变 raw stdout。
-
-## 2. 包与依赖层级
+## 1. 分层与依赖方向
 
 ```mermaid
 flowchart TB
-    Entry[cmd/xserial<br/>进程入口、signal context、退出码]
+    Entry[cmd/xserial<br/>进程入口与退出码]
+    Cmd[internal/cmd<br/>参数解析与依赖组装]
 
-    subgraph CommandLayer[internal/cmd · 命令层]
-        Root[root / completion]
-        List[list]
-        Conn[conn]
-    end
+    Raw[internal/rawui<br/>文本与 Shell 交互]
+    TUI[internal/tui<br/>二进制 Hex 交互]
 
-    subgraph Frontends[前端适配器]
-        Raw[internal/rawui<br/>raw mode、Ctrl-P、终端恢复、本地 UI]
-        TUI[internal/tui<br/>Bubble Tea、Text/Hex、viewport、命令面板]
-    end
+    Middleware[internal/middleware<br/>会话编排、事件与 Handler Pipeline]
+    Backend[internal/backend<br/>串口连接内核]
+    Transfer[internal/transfer<br/>raw upload 与 YMODEM]
 
-    Session[internal/session<br/>共享会话内核]
-    Transfer[internal/transfer<br/>raw upload、YMODEM、短写处理]
-    Serial[internal/serialport<br/>端口枚举、配置与打开]
+    Serial[internal/serialport<br/>串口 adapter]
     Logging[internal/logging<br/>结构化业务日志]
 
-    Entry --> CommandLayer
-    Root --> Conn
-    Root --> List
-    Conn --> Raw
-    Conn --> TUI
-    Conn --> Session
-    Conn --> Serial
-    Conn --> Logging
-    List --> Serial
-    Raw -->|实现 Frontend| Session
-    TUI -->|实现 Frontend| Session
-    Session --> Transfer
+    Entry --> Cmd
+    Cmd --> Raw
+    Cmd --> TUI
+    Cmd --> Middleware
+    Cmd --> Serial
+    Cmd --> Logging
+    Raw -->|实现 Frontend| Middleware
+    TUI -->|实现 Frontend| Middleware
+    Middleware --> Backend
+    Middleware --> Transfer
+    Backend -->|Port interface| Serial
 ```
 
-依赖始终从组装层指向能力层：
+各层职责：
 
-- `cmd/xserial` 不包含业务逻辑，只创建 signal context、执行根命令并呈现最终错误。
-- `internal/cmd` 解析参数、打开串口与日志文件、选择前端，然后创建 `session.Session`。
-- `rawui` 和 `tui` 都依赖 session 定义的窄接口，但 session 不依赖任何具体前端。
-- `session` 只依赖通用的 `io.ReadWriteCloser`、logger 能力和 transfer 模块，不认识 Cobra、Bubble Tea 或第三方串口类型。
-- `serialport` 隐藏 `go.bug.st/serial` 以及平台端口信息差异。
+- `cmd/xserial` 只处理进程生命周期；`internal/cmd` 解析并校验 CLI 输入、选择 frontend、创建依赖。
+- `internal/backend` 只负责串口连接、单 reader、单 writer、断线检测、有限重连和关闭，不认识 frontend、传输协议或 Cobra。
+- `internal/middleware` 是应用编排层。它把 backend 字节包装为 `Envelope`，经过双向 Pipeline 后交给 frontend；传输能力也在这一层获得方向独占权。
+- `rawui` 与 `tui` 只通过 `middleware.Endpoint` 发送命令和消费事件，不直接持有串口。
+- `serialport`、`logging` 是基础设施 adapter；`transfer` 封装具体发送算法。
 
-## 3. 连接组装
+依赖只朝内核能力方向流动，backend 不反向依赖 middleware 或 UI。
 
-`xserial conn <port> [baud]` 的组装过程如下：
+## 2. 运行时数据流
 
 ```mermaid
-flowchart TD
-    Args[CLI 参数] --> Parse[解析并校验 baud 与 frame]
-    Parse --> OpenPort[serialport.Open]
-    OpenPort --> OpenLog{是否指定 --log}
-    OpenLog -->|是| Log[打开 append 日志文件]
-    OpenLog -->|否| Mode
-    Log --> Mode{是否指定 --tui}
-    Mode -->|否| RawFrontend[创建 rawui.Frontend]
-    Mode -->|是| TUIFrontend[创建 tui.Frontend]
-    RawFrontend --> NewSession[创建 session.Session]
-    TUIFrontend --> NewSession
-    NewSession --> Run[Session.Run]
+flowchart LR
+    Device[串口设备]
+    Backend[backend]
+    Inbound[Inbound handlers<br/>注册顺序]
+    Frontend[rawui / tui]
+    Outbound[Outbound handlers<br/>逆注册顺序]
+
+    Device -->|bytes| Backend
+    Backend -->|Envelope| Inbound
+    Inbound -->|Event| Frontend
+    Frontend -->|Send| Outbound
+    Outbound -->|Envelope| Backend
+    Backend -->|bytes| Device
 ```
 
-命令层在资源打开成功后把串口所有权交给 session。`Session.Run` 返回前会完成关闭和任务收敛，命令层随后关闭自己拥有的 receive log 文件。
+Pipeline 使用包含 `Data`、`Direction`、`At` 和 `Source` 的字节 `Envelope`。Handler 可以：
 
-## 4. 前后端交互协议
+- 观察并原样转发；
+- 修改字节后继续转发；
+- 消费输入，阻止它到达下一层；
+- 申请方向独占能力。
 
-前端通过 `session.Endpoint` 与后端交互，不会拿到串口对象：
+Inbound 按注册顺序执行，Outbound 按逆注册顺序执行，形成对称的双向中间件链。当前 Handler 由代码组合，不支持运行时外部插件或配置脚本。
+
+这条 seam 可承载未来的过滤与重渲染需求。例如正则 Handler 可消费匹配行实现过滤；后续增加类型化 side event 后，可让 rawui 根据标注加深颜色。规则匹配与表现策略应分开，避免 middleware 直接输出 ANSI。
+
+## 3. 方向独占与传输
+
+Pipeline 支持四种能力：
+
+| Capability | 语义 |
+|---|---|
+| `Passive` | 观察或变换，不独占方向 |
+| `ConsumeInbound` | 独占消费设备输入 |
+| `ExclusiveOutbound` | 独占写入串口 |
+| `ExclusiveDuplex` | 同时独占输入与输出 |
+
+动态传输通过临时 `transferGate` 进入 Pipeline：
+
+- raw upload 申请 `ExclusiveOutbound`，防止文件字节与普通用户输入交错；
+- YMODEM 申请 `ExclusiveDuplex`，协议应答被消费到 transfer worker，不会泄漏给 rawui；
+- transfer 完成或取消后移除 gate，释放方向所有权；
+- TUI 产品界面只暴露 raw 文件发送；YMODEM 只属于 rawui 的交互能力。
+
+## 4. Backend 连接内核
+
+backend 对一次物理连接维护一个 reader 和一个 writer。所有写入调用 `transfer.WriteFull` 处理短写；收到的数据复制后再发出事件，避免复用 read buffer。
+
+```mermaid
+sequenceDiagram
+    participant R as Reader/Writer
+    participant B as Backend owner
+    participant P as Serial Port
+    participant M as Middleware
+
+    R->>B: read/write failure
+    B->>P: Close，解除阻塞 I/O
+    B->>M: Disconnected
+    loop 最多 reconnect attempts 次
+        B->>M: Reconnecting attempt/limit
+        B->>P: Open
+    end
+    alt 重连成功
+        B->>M: Reconnected
+        B->>B: 启动新 reader
+    else 次数耗尽
+        B-->>M: ErrReconnectExhausted
+    end
+```
+
+默认重连 5 次、固定间隔 1 秒；`--reconnect 0` 禁用。backend 只允许生命周期所有者替换和关闭当前 port，旧连接事件通过 generation 隔离。
+
+## 5. Frontend 契约
+
+Frontend 依赖 middleware 的窄接口：
 
 ```go
 type Frontend interface {
@@ -104,250 +130,65 @@ type Endpoint interface {
     Events() <-chan Event
     Send(context.Context, []byte) error
     StartUpload(context.Context, string) error
+    StartYMODEMUpload(context.Context, string) error
+    StartYMODEMDownload(context.Context, string) error
     CancelTransfer()
     Quit()
 }
 ```
 
-```mermaid
-flowchart LR
-    Frontend[Raw 或 TUI Frontend]
-    Endpoint[Session Endpoint]
-    Events[有界 Event channel]
-    Writer[唯一 Writer goroutine]
-    Upload[Upload worker]
+### rawui
 
-    Frontend -->|Send| Endpoint
-    Frontend -->|Start transfer / CancelTransfer| Endpoint
-    Frontend -->|Quit| Endpoint
-    Endpoint -->|写请求 + 完成确认| Writer
-    Endpoint --> Upload
-    Upload -->|分块写请求| Writer
-    Events -->|Received| Frontend
-    Events -->|UploadStarted| Frontend
-    Events -->|UploadProgress| Frontend
-    Events -->|UploadFinished| Frontend
-```
+- 进入终端 raw mode，并保证所有返回路径恢复终端；
+- 默认情况下普通字节透明地在 stdin/stdout 与串口之间传递；启用 `--time` 后，仅接收显示按行增加时间前缀；
+- `Ctrl-P` 状态机解释本地帮助、退出、raw upload 和 YMODEM；
+- 本地提示、进度和错误只写 `stderr`，使用 CRLF；
+- 断线和重连状态作为本地提示展示，不污染设备 stdout。
 
-交互语义：
+### tui
 
-- `Send` 会复制调用方数据，并等待唯一 writer 返回真实写入结果。
-- event channel 只由 session 创建和关闭；前端只能消费，不能关闭。
-- `Received.Data` 在发出前已经复制，不会引用下一次串口读取复用的 buffer。
-- 上传处于活动状态时，普通 `Send` 返回 `ErrTransferActive`，防止用户输入和文件字节交错。
-- 上传进度最多约每 100 ms 发出一次，结束事件携带路径、已写字节数和错误。
-- `Quit` 是对 session context 的取消请求，资源关闭仍由 Session 统一完成。
+- 只面向二进制数据，不提供 Text 模式或 YMODEM 入口；
+- 智能 Hex 输入接受 `AA 01`、`AA01`、`AA,01` 和 `0xAA 0x01`；
+- RX/TX 使用统一时间线，以方向、长度、Hex 和 ASCII 展示；
+- `↑/↓` 浏览发送历史，`PageUp/PageDown` 滚动流量历史；
+- Command Palette 仅提供 raw 文件发送、清屏、取消传输和退出。
 
-## 5. 会话运行时并发模型
+## 6. 输出与日志契约
 
-一次连接包含三个常驻任务，以及按需创建的上传任务：
-
-```mermaid
-flowchart TB
-    Run[Session.Run]
-    Context[Session Context]
-    Reader[Reader goroutine]
-    Writer[Writer goroutine]
-    Frontend[Frontend goroutine]
-    Upload[可选 Upload worker]
-    Port[(Serial Port)]
-    ReceiveLog[(Receive Log)]
-    EventQueue[Event channel<br/>容量 32]
-    WriteQueue[Write request channel]
-
-    Run --> Context
-    Context --> Reader
-    Context --> Writer
-    Context --> Frontend
-    Context -.需要时.-> Upload
-
-    Port -->|Read，单次 4096 bytes| Reader
-    Reader -->|先记录| ReceiveLog
-    Reader -->|Received| EventQueue
-    EventQueue --> Frontend
-
-    Frontend -->|Send| WriteQueue
-    Upload -->|256-byte chunks| WriteQueue
-    WriteQueue --> Writer
-    Writer -->|唯一写入点| Port
-```
-
-### 串口读取
-
-reader 每次最多读取 4096 字节。收到数据后按固定顺序执行：
-
-1. 复制本次读取的字节；
-2. 写入 receive log；
-3. 产生带接收时间的 `Received` 事件；
-4. 等待前端消费形成有界背压，不静默丢弃设备数据。
-
-### 串口写入
-
-writer 是会话内唯一直接调用 `SerialPort.Write` 的 goroutine。每个请求都使用 `transfer.WriteFull` 处理短写：持续写到全部完成，或返回底层错误 / `io.ErrShortWrite`。
-
-普通输入和上传虽然来自不同任务，但最终都会进入同一个 write request channel，因此不会并发写串口。
-
-### Raw upload
-
-上传 worker 验证普通文件、打开文件并以 256 字节分块读取。它响应 context 取消并通过统一 writer 写串口。raw upload 只保证字节透传，不提供协议级校验、重传或断点续传。
-
-### YMODEM
-
-YMODEM 作为独立 transfer 实现支持单文件上传和下载。传输期间会话 reader 仍是串口的唯一读取者，但会把收到的协议字节交给 YMODEM worker；所有协议写入继续经过统一 writer。下载使用发送端元数据中的 basename 保存到当前目录，并以独占创建方式拒绝覆盖已有文件。
-
-transfer 在流式读写文件内容时同步计算 CRC32，并统计被拒绝或校验失败的帧与实际重传次数。重传通过事件交给 session 记录，最终统计随完成事件交给前端显示。
-
-raw frontend 以单行进度和本地结果展示这些事件；TUI 通过命令面板启动 YMODEM 上传或下载，并在状态栏展示进度、重传和最终统计。TUI 会话不向 alternate screen 外的 stderr 写后台 session 日志，避免破坏全屏渲染。
-
-## 6. 两种前端
-
-### Raw frontend
-
-```mermaid
-flowchart LR
-    Stdin[stdin] --> CancelReader[可取消 Reader]
-    CancelReader --> Prefix[Ctrl-P 输入状态机]
-    Prefix -->|普通字节 / literal Ctrl-P| Send[Endpoint.Send]
-    Prefix -->|h / u / q| Local[本地命令注册表]
-    Events[Session Events] -->|Received| Stdout[stdout 原始字节]
-    Local --> Stderr[stderr CRLF UI]
-    Events -->|上传进度与结果| Stderr
-```
-
-- 进入时保存终端状态并切换 raw mode，所有返回路径都恢复终端。
-- `Ctrl-P` 是默认 prefix；`Ctrl-P Ctrl-P` 向设备发送 `0x10`。
-- 上传路径输入、帮助和进度属于本地 UI，只写 stderr。
-- session 取消时，可取消 reader 用于解除阻塞的 stdin 读取。
-
-### TUI frontend
-
-```mermaid
-flowchart TB
-    Keys[Bubble Tea Key Events] --> Model[TUI Model]
-    SessionEvents[Session Events] --> Model
-    Model --> Text[Text renderer<br/>安全 SGR、CR/CRLF redraw]
-    Model --> Hex[Hex renderer<br/>16 bytes / row]
-    Model --> Viewport[有界 transcript + viewport]
-    Model --> Palette[浮动 Command Palette]
-    Model -->|Send / Upload / Quit| Endpoint[Session Endpoint]
-    Text --> Viewport
-    Hex --> Viewport
-    Viewport --> Screen[Alternate Screen]
-    Palette --> Screen
-```
-
-- Bubble Tea command 每次等待一个 session event，不另起串口 reader。
-- Text 模式按 Enter 发送输入并追加 `CR`；设备回显只来自 `Received`，不会由 TUI 本地重复写入 transcript。
-- Text renderer 保留安全的 SGR 颜色，过滤清屏、光标移动、OSC/DCS 等可能破坏整体布局的控制序列；有限支持 CR/CRLF 和整行重绘。
-- Hex 模式严格解析空格分隔的两位字节，不追加 CR；接收数据按 16 字节 hexdump 展示。
-- transcript 最多保留 5000 条已完成逻辑行，当前未完成行额外保存；viewport 使用终端 cell width 处理 ANSI、CJK 和滚动。
-- Command Palette 使用独立浮动 layer 覆盖在主界面上，菜单状态不会替换或暂停 transcript。
+- rawui 的设备字节只走 `stdout`；xserial 本地信息只走 `stderr`。
+- TUI 明确占用 `stdout` 的 alternate screen，因此会话 logger 在 TUI 模式下关闭，状态由界面事件呈现。
+- receive log 记录 middleware 收到的设备数据；`--time` 同时控制 rawui 行前缀、日志行前缀和 TUI 时间展示。
+- adapter 返回可 unwrap 的错误，由掌握业务动作的上层记录一次。
 
 ## 7. 关闭协议
 
-任何常驻任务结束、父 context 取消、用户退出或串口报错都会进入同一关闭路径：
-
-```mermaid
-sequenceDiagram
-    participant Cause as 任一结束原因
-    participant Session as Session.Run
-    participant Endpoint as Endpoint
-    participant Port as Serial Port
-    participant Tasks as Reader / Writer / Upload
-    participant Frontend as Raw / TUI
-
-    Cause->>Session: 任务结果或 context.Done
-    Session->>Session: cancel session context
-    Session->>Endpoint: 标记 stopping，取消上传
-    Session->>Port: Close（幂等，解除阻塞 Read/Write）
-    Session->>Tasks: 等待后台任务退出
-    Session->>Endpoint: 关闭 event channel
-    Session->>Frontend: 等待前端退出与终端恢复
-    Session-->>Cause: 返回首个业务错误并合并清理错误
-```
-
-正常 EOF、用户退出和 context 取消被视为正常结束；串口读写、日志写入、前端或关闭错误向命令层返回，并保留 `errors.Is/As` 可判定性。
-
-## 8. 日志与数据记录
-
-业务日志和设备数据是两条不同通道：
-
-```mermaid
-flowchart LR
-    SessionEvent[业务动作] --> Logger[internal/logging]
-    Logger -->|结构化日志| Stderr[stderr]
-    DeviceBytes[设备字节] --> SessionReader[session reader]
-    SessionReader --> FrontendOutput[raw stdout 或 TUI]
-    SessionReader --> ReceiveLog[可选 receive log]
-```
-
-业务日志格式固定为：
-
 ```text
-[ INFO | session.connected ] port="/dev/ttyUSB0" baud=115200
+任一任务结束或报错
+        -> cancel context
+        -> Close port 解除阻塞 I/O
+        -> 等待 backend、transfer 与 frontend 收敛
+        -> 关闭 event channel
+        -> 恢复终端
+        -> 返回首个业务错误
 ```
 
-adapter 不自行记录错误；错误在掌握业务语义的命令层或 session 层记录一次，避免重复日志。
+资源只有一个明确所有者；goroutine 不得在 `Run` 返回后继续访问串口或终端；并发同步使用 context、channel 和 wait group，不依赖 sleep 猜测顺序。
 
-## 9. 平台与外部依赖
+## 8. 软件设计原则
 
-| 能力 | 实现 |
-|---|---|
-| CLI 与 completion | Cobra |
-| 串口 | `go.bug.st/serial`，由 `internal/serialport` 隔离 |
-| Raw terminal | `golang.org/x/term` |
-| 可取消终端输入 | `github.com/muesli/cancelreader` |
-| TUI runtime | Bubble Tea |
-| TUI 样式、cell width 与浮动 layer | Lip Gloss |
-| ANSI 解析与换行 | `github.com/charmbracelet/x/ansi` |
+- 单一职责：backend、middleware、frontend、adapter 和 transfer 各自拥有清晰变化原因。
+- 依赖倒置：上层依赖调用方定义的 `Port`、`Frontend`、`Endpoint`、`Handler` 等小接口。
+- 开闭原则：新增过滤、着色标注或协议 gate 时扩展 Handler，不修改 backend 读写循环。
+- 接口隔离：Inbound、Outbound、Starter、Stopper 按能力拆分，Handler 无需实现无关方法。
+- 明确所有权：单 writer、方向独占和统一关闭协议避免隐含并发竞争。
+- 深模块与 YAGNI：接口隐藏生命周期和并发复杂度；没有真实需求时不建立外部插件系统、事件总线或配置 DSL。
+- 字节透明与表现分离：middleware 处理数据语义，frontend 决定时间前缀、ANSI、布局和交互表现；rawui 只有显式启用 `--time` 才改变接收显示。
 
-平台专有端口详情放在 `details*.go` 中，通过 build tags / 平台文件隔离，不向 session 或前端扩散平台判断。
+## 9. 测试边界
 
-## 10. 测试边界
-
-```mermaid
-flowchart LR
-    Unit[快速单元测试]
-    Integration[内存 fake 集成测试]
-    Cross[跨平台构建]
-
-    Unit -->|配置、Hex、ANSI、viewport、transfer| Packages[各职责包]
-    Integration -->|阻塞读取、短写、关闭解阻塞、上传互斥| Session[session 生命周期]
-    Cross -->|darwin / linux / windows<br/>amd64 / arm64| Build[发布构建]
-```
-
-- session 测试使用能够阻塞读取、由 Close 解阻塞、产生短写并检测并发写入的 fake port。
-- rawui 测试覆盖 prefix、字节透明、终端恢复和可取消输入。
-- TUI 测试覆盖 Text/Hex、ANSI 安全过滤、CR 重绘、浮动命令面板、CJK 宽度和固定布局。
-- transfer 测试覆盖短写、取消和非法 chunk size。
-- 并发测试使用 channel/context 明确同步，不依赖 sleep 猜测调度。
-
-## 11. CI 与发布
-
-```mermaid
-flowchart LR
-    Push[Push / Pull Request] --> CI[CI workflow]
-    CI --> Test[go test ./...]
-    CI --> Race[go test -race ./...]
-
-    Tag[Push v* tag] --> Release[Release workflow]
-    Release --> ReleaseTest[go test ./...]
-    ReleaseTest --> Make[make release]
-    Make --> Archives[Darwin / Linux / Windows<br/>amd64 / arm64 archives]
-    Archives --> Checksums[checksums.txt]
-    Checksums --> GitHubRelease[GitHub Release]
-```
-
-`make release` 使用 `CGO_ENABLED=0`、`-trimpath` 和 `-s -w` 生成发布二进制，并通过 ldflags 注入 tag 版本。开发构建保留调试信息。
-
-## 12. 扩展规则
-
-新增功能时先判断它属于哪一侧：
-
-- 新的按键、菜单、输入方式和展示效果属于具体 frontend。
-- 自动重连、录制、触发器和连接生命周期属于 session。
-- DTR/RTS、平台设备信息和串口配置属于 serialport adapter。
-- 新的发送算法属于 transfer；需要可靠性的协议必须与 raw upload 明确区分。
-- flags、配置文件和 completion 属于命令层。
-
-只有真实出现第二个实现，或测试需要替换外部副作用时，才在调用方一侧增加小 interface。前端与后端之间继续通过 `Frontend`、`Endpoint` 和稳定事件交互，不把具体 UI 或第三方串口类型带入 session。
+- backend fake 覆盖阻塞读取、短写、断线、有限重连和关闭解阻塞；
+- middleware 测试覆盖双向顺序、变换、消费和独占冲突；
+- 会话测试验证 backend、Pipeline、传输 gate 与 frontend 的集成生命周期；
+- rawui 测试覆盖 prefix、透明字节、终端恢复和 YMODEM 交互；
+- TUI 测试覆盖智能 Hex、TX/RX 时间线、发送历史、命令面板和滚动；
+- 默认运行 `go test ./...`，并发相关改动运行 `go test -race ./...`。
