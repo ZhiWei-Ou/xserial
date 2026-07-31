@@ -2,42 +2,31 @@ package logging
 
 import (
 	"bytes"
-	"errors"
 	"testing"
 )
 
-func TestLoggerWritesDistinctStructuredEntry(t *testing.T) {
-	var output bytes.Buffer
-	logger := New(&output)
-
-	logger.Info("session.connected", "port", "/dev/ttyUSB0", "baud", 115200)
-
-	want := "[ INFO | session.connected ] port=\"/dev/ttyUSB0\" baud=115200\r\n"
-	if got := output.String(); got != want {
-		t.Fatalf("Info() output = %q, want %q", got, want)
-	}
+type recordingFormatter struct {
+	entries []Entry
 }
 
-func TestLoggerFormatsErrorAndMissingValue(t *testing.T) {
-	var output bytes.Buffer
-	logger := New(&output)
-
-	logger.Error("application.failed", "error", errors.New("port closed"), "detail")
-
-	want := "[ ERROR | application.failed ] error=\"port closed\" detail=\"<missing>\"\r\n"
-	if got := output.String(); got != want {
-		t.Fatalf("Error() output = %q, want %q", got, want)
-	}
+func (f *recordingFormatter) Format(entry Entry) []byte {
+	f.entries = append(f.entries, entry)
+	return []byte("formatted")
 }
 
-func TestLoggerColorsOnlyLevelWhenColorIsEnabled(t *testing.T) {
+func TestLevelFilteringAndRawOutputUseSeparatePaths(t *testing.T) {
 	var output bytes.Buffer
-	logger := &Logger{output: &output, color: true}
+	formatter := &recordingFormatter{}
+	logger := New(&output, WithLevel(WarnLevel), WithFormatter(formatter))
 
-	logger.Warn("transfer.failed", "path", "README.md")
+	logger.Info("filtered")
+	logger.Warn("formatted")
+	_, _ = logger.Raw([]byte("raw"))
 
-	want := "[ \x1b[33mWARN\x1b[0m | transfer.failed ] path=\"README.md\"\r\n"
-	if got := output.String(); got != want {
-		t.Fatalf("Warn() output = %q, want %q", got, want)
+	if len(formatter.entries) != 1 || formatter.entries[0].Level != WarnLevel {
+		t.Fatalf("formatted entries = %#v", formatter.entries)
+	}
+	if got := output.String(); got != "formattedraw" {
+		t.Fatalf("output = %q", got)
 	}
 }

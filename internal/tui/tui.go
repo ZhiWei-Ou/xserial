@@ -204,7 +204,6 @@ func (m *model) handleEvent(event middleware.Event) {
 			m.txBytes += event.Bytes
 			m.status = fmt.Sprintf("Uploaded %s (%s)", event.Path, formatBytes(event.Bytes))
 		}
-		event.Acknowledge()
 	}
 }
 

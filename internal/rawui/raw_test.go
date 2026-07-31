@@ -7,7 +7,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ZhiWei-Ou/xserial/internal/logging"
 	session "github.com/ZhiWei-Ou/xserial/internal/middleware"
 )
 
@@ -280,7 +279,7 @@ func TestRawFrontendHidesDeviceBytesDuringYMODEMFileSelection(t *testing.T) {
 	}
 	defer input.Close()
 	defer inputWriter.Close()
-	prompt := &signalWriter{match: []byte("YMODEM UPLOAD ] file"), done: make(chan struct{})}
+	prompt := &signalWriter{match: []byte("YMODEM upload file"), done: make(chan struct{})}
 	var output bytes.Buffer
 	frontend := New(Config{Terminal: &fakeTerminal{}, Input: input, Output: &output, Local: prompt})
 	result := make(chan error, 1)
@@ -302,33 +301,30 @@ func TestRawFrontendHidesDeviceBytesDuringYMODEMFileSelection(t *testing.T) {
 	}
 }
 
-func TestRawFrontendEndsCompletedProgressBeforeLoggerWrites(t *testing.T) {
+func TestRawFrontendEndsProgressBeforeCompletion(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	endpoint := &fakeEndpoint{events: make(chan session.Event), cancel: cancel}
+	defer cancel()
+	endpoint := &fakeEndpoint{events: make(chan session.Event, 2), cancel: cancel}
+	endpoint.events <- session.UploadProgress{Written: 2048, Total: 2672}
+	endpoint.events <- session.UploadFinished{Bytes: 2672}
+	close(endpoint.events)
 	input, inputWriter, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer input.Close()
 	defer inputWriter.Close()
-	local := &signalWriter{match: []byte("2672/2672 bytes"), done: make(chan struct{})}
-	frontend := New(Config{Terminal: &fakeTerminal{}, Input: input, Output: &bytes.Buffer{}, Local: local})
-	result := make(chan error, 1)
-	go func() { result <- frontend.Run(ctx, endpoint) }()
-
-	endpoint.events <- session.YMODEMProgress{Direction: "upload", Written: 2672, Total: 2672}
-	<-local.done
-	logging.New(local).Info("transfer.ymodem_completed", "bytes", 2672)
-	cancel()
-	if err := <-result; err != nil {
+	var local bytes.Buffer
+	frontend := New(Config{Terminal: &fakeTerminal{}, Input: input, Output: &bytes.Buffer{}, Local: &local})
+	if err := frontend.Run(ctx, endpoint); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if got := local.String(); !bytes.Contains([]byte(got), []byte("2672/2672 bytes\r\n[ INFO")) {
-		t.Fatalf("progress and log share one line: %q", got)
+	if got := local.String(); !bytes.Contains([]byte(got), []byte("2048/2672 bytes\r\nUploaded 2672 bytes\r\n")) {
+		t.Fatalf("progress and completion share one line: %q", got)
 	}
 }
 
-func TestRawFrontendDisplaysYMODEMChecksumAndFrameStats(t *testing.T) {
+func TestRawFrontendDisplaysConciseYMODEMResult(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	endpoint := &fakeEndpoint{events: make(chan session.Event, 1), cancel: cancel}
 	endpoint.events <- session.YMODEMFinished{
@@ -348,7 +344,7 @@ func TestRawFrontendDisplaysYMODEMChecksumAndFrameStats(t *testing.T) {
 	if err := frontend.Run(ctx, endpoint); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	want := "[ YMODEM UPLOAD ] completed: README.md bytes=6913 crc32=1234abcd failed_frames=2 retried_frames=2\r\n"
+	want := "Sent README.md (6913 bytes, CRC32 1234abcd, 2 retries)\r\n"
 	if got := local.String(); got != want {
 		t.Fatalf("local output = %q, want %q", got, want)
 	}

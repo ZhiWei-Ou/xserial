@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -202,41 +203,36 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 				if err := transfer.WriteFull(deviceOutput, event.Data); err != nil {
 					return fmt.Errorf("write device output: %w", err)
 				}
-			case session.Disconnected:
-				printLocalLine(f.cfg.Local, fmt.Sprintf("[ DISCONNECTED ] %v", event.Err))
-			case session.Reconnecting:
-				printLocalLine(f.cfg.Local, fmt.Sprintf("[ RECONNECTING ] attempt=%d/%d", event.Attempt, event.Limit))
-			case session.Reconnected:
-				printLocalLine(f.cfg.Local, "[ RECONNECTED ]")
 			case session.UploadProgress:
-				progressLineOpen = event.Written != event.Total
-				ending := ""
-				if !progressLineOpen {
-					ending = "\r\n"
+				if event.Written == event.Total {
+					continue
 				}
-				fmt.Fprintf(f.cfg.Local, "\r[ RAW UPLOAD ] %d/%d bytes%s", event.Written, event.Total, ending)
+				progressLineOpen = true
+				fmt.Fprintf(f.cfg.Local, "\rUploading: %d/%d bytes", event.Written, event.Total)
 			case session.UploadFinished:
 				if progressLineOpen {
 					printLocalLine(f.cfg.Local, "")
 					progressLineOpen = false
 				}
 				if errors.Is(event.Err, context.Canceled) {
-					printLocalLine(f.cfg.Local, "[ RAW UPLOAD ] canceled")
+					printLocalLine(f.cfg.Local, "Upload canceled")
 				} else if event.Err != nil {
-					printLocalLine(f.cfg.Local, fmt.Sprintf("[ RAW UPLOAD ] failed: %v", event.Err))
+					printLocalLine(f.cfg.Local, fmt.Sprintf("Upload failed: %v", event.Err))
 				} else {
-					printLocalLine(f.cfg.Local, fmt.Sprintf("[ RAW UPLOAD ] completed: bytes=%d", event.Bytes))
+					printLocalLine(f.cfg.Local, fmt.Sprintf("Uploaded %d bytes", event.Bytes))
 				}
-				event.Acknowledge()
 				state = inputNormal
 				requestRead()
 			case session.YMODEMProgress:
-				progressLineOpen = event.Written != event.Total
-				ending := ""
-				if !progressLineOpen {
-					ending = "\r\n"
+				if event.Written == event.Total {
+					continue
 				}
-				fmt.Fprintf(f.cfg.Local, "\r[ YMODEM %s ] %d/%d bytes%s", strings.ToUpper(event.Direction), event.Written, event.Total, ending)
+				progressLineOpen = true
+				action := "Sending"
+				if event.Direction == "download" {
+					action = "Receiving"
+				}
+				fmt.Fprintf(f.cfg.Local, "\r%s: %d/%d bytes", action, event.Written, event.Total)
 			case session.YMODEMFrameRetry:
 				if progressLineOpen {
 					printLocalLine(f.cfg.Local, "")
@@ -249,19 +245,13 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 					printLocalLine(f.cfg.Local, "")
 					progressLineOpen = false
 				}
-				result := fmt.Sprintf(
-					"bytes=%d crc32=%08x failed_frames=%d retried_frames=%d",
-					event.Bytes, event.CRC32, event.FailedFrames, event.RetriedFrames,
-				)
-				prefix := fmt.Sprintf("[ YMODEM %s ]", strings.ToUpper(event.Direction))
 				if errors.Is(event.Err, context.Canceled) {
-					printLocalLine(f.cfg.Local, fmt.Sprintf("%s canceled: %s", prefix, result))
+					printLocalLine(f.cfg.Local, fmt.Sprintf("YMODEM %s canceled", event.Direction))
 				} else if event.Err != nil {
-					printLocalLine(f.cfg.Local, fmt.Sprintf("%s failed: %v %s", prefix, event.Err, result))
+					printLocalLine(f.cfg.Local, fmt.Sprintf("YMODEM %s failed: %v", event.Direction, event.Err))
 				} else {
-					printLocalLine(f.cfg.Local, fmt.Sprintf("%s completed: %s %s", prefix, event.Path, result))
+					printLocalLine(f.cfg.Local, formatYMODEMResult(event))
 				}
-				event.Acknowledge()
 				state = inputNormal
 				requestRead()
 			}
@@ -298,21 +288,21 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 						ymodemMode = false
 						path.Reset()
 						state = inputUploadPath
-						fmt.Fprint(f.cfg.Local, "\r\n[ RAW UPLOAD ] file (Esc to cancel): ")
+						fmt.Fprint(f.cfg.Local, "\r\nRaw upload file (Esc to cancel): ")
 					case actionYMODEMUpload:
 						ymodemMode = true
 						path.Reset()
 						state = inputYMODEMUploadPath
-						fmt.Fprint(f.cfg.Local, "\r\n[ YMODEM UPLOAD ] file (Esc to cancel): ")
+						fmt.Fprint(f.cfg.Local, "\r\nYMODEM upload file (Esc to cancel): ")
 					case actionYMODEMDownload:
 						ymodemMode = true
 						printLocalLine(f.cfg.Local, "")
 						if err := endpoint.StartYMODEMDownload(ctx, "."); err != nil {
 							ymodemMode = false
-							printLocalLine(f.cfg.Local, fmt.Sprintf("[ YMODEM DOWNLOAD ] failed: %v", err))
+							printLocalLine(f.cfg.Local, fmt.Sprintf("YMODEM download failed: %v", err))
 						} else {
 							state = inputYMODEMTransfer
-							printLocalLine(f.cfg.Local, "[ YMODEM DOWNLOAD ] waiting for sender (Esc to cancel)")
+							printLocalLine(f.cfg.Local, "Waiting for sender (Esc to cancel)")
 						}
 					case actionQuit:
 						printLocalLine(f.cfg.Local, "")
@@ -331,7 +321,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 					path.Reset()
 					state = inputNormal
 					printLocalLine(f.cfg.Local, "")
-					printLocalLine(f.cfg.Local, "[ LOCAL ] file selection canceled")
+					printLocalLine(f.cfg.Local, "File selection canceled")
 				case '\r', '\n':
 					printLocalLine(f.cfg.Local, "")
 					name := strings.TrimSpace(path.String())
@@ -340,19 +330,19 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 						state = inputNormal
 					} else if state == inputUploadPath {
 						if err := endpoint.StartUpload(ctx, name); err != nil {
-							printLocalLine(f.cfg.Local, fmt.Sprintf("[ RAW UPLOAD ] failed: %v", err))
+							printLocalLine(f.cfg.Local, fmt.Sprintf("Upload failed: %v", err))
 							state = inputNormal
 						} else {
 							state = inputUploading
-							printLocalLine(f.cfg.Local, "[ RAW UPLOAD ] started (Esc to cancel)")
+							printLocalLine(f.cfg.Local, "Uploading (Esc to cancel)")
 						}
 					} else if err := endpoint.StartYMODEMUpload(ctx, name); err != nil {
 						ymodemMode = false
-						printLocalLine(f.cfg.Local, fmt.Sprintf("[ YMODEM UPLOAD ] failed: %v", err))
+						printLocalLine(f.cfg.Local, fmt.Sprintf("YMODEM upload failed: %v", err))
 						state = inputNormal
 					} else {
 						state = inputYMODEMTransfer
-						printLocalLine(f.cfg.Local, "[ YMODEM UPLOAD ] started (Esc to cancel)")
+						printLocalLine(f.cfg.Local, "Waiting for receiver (Esc to cancel)")
 					}
 				case 0x7f, '\b':
 					if path.Len() > 0 {
@@ -369,7 +359,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 				if result.b == 0x1b {
 					endpoint.CancelTransfer()
 					state = inputCancellingTransfer
-					printLocalLine(f.cfg.Local, "\r[ TRANSFER ] canceling")
+					printLocalLine(f.cfg.Local, "\rCanceling transfer")
 				}
 			case inputCancellingTransfer:
 			}
@@ -382,12 +372,25 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 
 func printHelp(w io.Writer) {
 	printLocalLine(w, "")
-	printLocalLine(w, "[ LOCAL ] commands:")
+	printLocalLine(w, "Commands:")
 	for _, command := range localCommands {
 		printLocalLine(w, fmt.Sprintf("  Ctrl-P %-7s %s", command.label, command.description))
 	}
 	printLocalLine(w, "  Ctrl-P Ctrl-P  send Ctrl-P")
 	printLocalLine(w, "  Esc            cancel file selection or transfer")
+}
+
+func formatYMODEMResult(event session.YMODEMFinished) string {
+	action := "Sent"
+	if event.Direction == "download" {
+		action = "Received"
+	}
+	name := filepath.Base(event.Path)
+	result := fmt.Sprintf("%s %s (%d bytes, CRC32 %08x", action, name, event.Bytes, event.CRC32)
+	if event.RetriedFrames > 0 {
+		result += fmt.Sprintf(", %d retries", event.RetriedFrames)
+	}
+	return result + ")"
 }
 
 func findLocalCommand(key byte) (localCommand, bool) {

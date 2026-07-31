@@ -10,6 +10,7 @@ import (
 
 	"github.com/ZhiWei-Ou/xserial/internal/backend"
 	"github.com/ZhiWei-Ou/xserial/internal/linetime"
+	"github.com/ZhiWei-Ou/xserial/internal/logging"
 	"github.com/ZhiWei-Ou/xserial/internal/transfer"
 )
 
@@ -20,11 +21,6 @@ var (
 
 type SerialPort interface {
 	io.ReadWriteCloser
-}
-
-type Logger interface {
-	Info(event string, keyValues ...any)
-	Warn(event string, keyValues ...any)
 }
 
 type Event interface {
@@ -73,20 +69,9 @@ type UploadFinished struct {
 	Path  string
 	Bytes int64
 	Err   error
-
-	acknowledged chan struct{}
 }
 
 func (UploadFinished) isSessionEvent() {}
-
-// Acknowledge lets the session log a transfer result only after the frontend
-// has closed its in-place progress line and rendered the result.
-func (e UploadFinished) Acknowledge() {
-	select {
-	case e.acknowledged <- struct{}{}:
-	default:
-	}
-}
 
 type YMODEMProgress struct {
 	Direction      string
@@ -123,20 +108,9 @@ type YMODEMFinished struct {
 	FailedFrames  int
 	RetriedFrames int
 	Err           error
-
-	acknowledged chan struct{}
 }
 
 func (YMODEMFinished) isSessionEvent() {}
-
-// Acknowledge lets the session log a transfer result only after the frontend
-// has closed its in-place progress line and rendered the result.
-func (e YMODEMFinished) Acknowledge() {
-	select {
-	case e.acknowledged <- struct{}{}:
-	default:
-	}
-}
 
 type Endpoint interface {
 	Events() <-chan Event
@@ -160,7 +134,7 @@ type Config struct {
 	Frontend          Frontend
 	ReceiveLog        io.Writer
 	ReceiveTimeFormat string
-	Logger            Logger
+	Logger            *logging.Logger
 	Handlers          []Handler
 }
 
@@ -176,7 +150,7 @@ type endpoint struct {
 	events    chan Event
 	ready     chan struct{}
 	readyOnce sync.Once
-	logger    Logger
+	logger    *logging.Logger
 	backend   *backend.Endpoint
 	pipeline  *Pipeline
 
@@ -341,15 +315,7 @@ func (e *endpoint) runUpload(ctx context.Context, path string) {
 
 	e.finishTransfer()
 
-	finished := UploadFinished{Path: path, Bytes: n, Err: err, acknowledged: make(chan struct{}, 1)}
-	if e.emit(finished) {
-		e.waitForAcknowledgement(ctx, finished.acknowledged)
-	}
-	if err != nil && !errors.Is(err, context.Canceled) {
-		e.logWarn("transfer.upload_failed", "path", path, "bytes", n, "error", err)
-	} else if err == nil {
-		e.logInfo("transfer.upload_completed", "path", path, "bytes", n)
-	}
+	e.emit(UploadFinished{Path: path, Bytes: n, Err: err})
 }
 
 func (e *endpoint) runYMODEMUpload(ctx context.Context, path string) {
@@ -360,11 +326,7 @@ func (e *endpoint) runYMODEMUpload(ctx context.Context, path string) {
 		e.reportYMODEMRetry(ctx, "upload", path, retry)
 	})
 	e.finishTransfer()
-	finished := newYMODEMFinished("upload", path, stats, err)
-	if e.emit(finished) {
-		e.waitForAcknowledgement(ctx, finished.acknowledged)
-	}
-	e.logYMODEMResult("upload", path, stats, err)
+	e.emit(newYMODEMFinished("upload", path, stats, err))
 }
 
 func (e *endpoint) runYMODEMDownload(ctx context.Context, dir string) {
@@ -375,18 +337,14 @@ func (e *endpoint) runYMODEMDownload(ctx context.Context, dir string) {
 		e.reportYMODEMRetry(ctx, "download", retry.Path, retry)
 	})
 	e.finishTransfer()
-	finished := newYMODEMFinished("download", path, stats, err)
-	if e.emit(finished) {
-		e.waitForAcknowledgement(ctx, finished.acknowledged)
-	}
-	e.logYMODEMResult("download", path, stats, err)
+	e.emit(newYMODEMFinished("download", path, stats, err))
 }
 
 func newYMODEMFinished(direction, path string, stats transfer.YMODEMStats, err error) YMODEMFinished {
 	return YMODEMFinished{
 		Direction: direction, Path: path, Bytes: stats.Bytes, CRC32: stats.CRC32,
 		FailedFrames: stats.FailedFrames, RetriedFrames: stats.RetriedFrames,
-		Err: err, acknowledged: make(chan struct{}, 1),
+		Err: err,
 	}
 }
 
@@ -399,7 +357,7 @@ func (e *endpoint) reportYMODEMRetry(ctx context.Context, direction, path string
 	if e.emit(event) {
 		e.waitForAcknowledgement(ctx, event.acknowledged)
 	}
-	e.logWarn(
+	e.logger.Warn(
 		"transfer.ymodem_frame_retry",
 		"direction", direction,
 		"path", path,
@@ -407,22 +365,6 @@ func (e *endpoint) reportYMODEMRetry(ctx context.Context, direction, path string
 		"attempt", retry.Attempt,
 		"reason", retry.Reason,
 	)
-}
-
-func (e *endpoint) logYMODEMResult(direction, path string, stats transfer.YMODEMStats, err error) {
-	values := []any{
-		"direction", direction,
-		"path", path,
-		"bytes", stats.Bytes,
-		"crc32", fmt.Sprintf("%08x", stats.CRC32),
-		"failed_frames", stats.FailedFrames,
-		"retried_frames", stats.RetriedFrames,
-	}
-	if err != nil && !errors.Is(err, context.Canceled) {
-		e.logWarn("transfer.ymodem_failed", append(values, "error", err)...)
-	} else if err == nil {
-		e.logInfo("transfer.ymodem_completed", values...)
-	}
 }
 
 func (e *endpoint) waitForAcknowledgement(ctx context.Context, acknowledged <-chan struct{}) {
@@ -516,18 +458,6 @@ func (e *endpoint) stop() {
 	e.mu.Unlock()
 	if cancel != nil {
 		cancel()
-	}
-}
-
-func (e *endpoint) logInfo(event string, values ...any) {
-	if e.logger != nil {
-		e.logger.Info(event, values...)
-	}
-}
-
-func (e *endpoint) logWarn(event string, values ...any) {
-	if e.logger != nil {
-		e.logger.Warn(event, values...)
 	}
 }
 
@@ -663,15 +593,16 @@ func (s *Session) runBackendEvents(ctx context.Context, e *endpoint) error {
 			}
 		case backend.Disconnected:
 			e.CancelTransfer()
-			e.logWarn("session.disconnected", "error", event.Err)
+			e.logger.Warn("session.disconnected", "error", event.Err)
 			e.emit(Disconnected{Err: event.Err})
 		case backend.Reconnecting:
 			if event.Attempt > 1 {
-				e.logWarn("session.reconnect_failed", "attempt", event.Attempt-1, "error", event.Err)
+				e.logger.Warn("session.reconnect_failed", "attempt", event.Attempt-1, "error", event.Err)
 			}
+			e.logger.Warn("session.reconnecting", "attempt", event.Attempt, "limit", event.Limit)
 			e.emit(Reconnecting{Attempt: event.Attempt, Limit: event.Limit, Err: event.Err})
 		case backend.Reconnected:
-			e.logInfo("session.reconnected", "attempt", event.Attempt)
+			e.logger.Info("session.reconnected", "attempt", event.Attempt)
 			e.emit(Reconnected{})
 		}
 	}

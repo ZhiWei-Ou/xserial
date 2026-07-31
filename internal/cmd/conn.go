@@ -128,16 +128,13 @@ func runConn(ctx context.Context, opts connOptions) error {
 		defer receiveLog.Close()
 	}
 
-	logger.Info(
-		"session.connected",
-		"port", opts.port,
-		"baud", opts.baud,
-		"data_bits", opts.dataBits,
-		"parity", opts.parity,
-		"stop_bits", opts.stopBits,
-	)
+	logger.Info("session.connected", "port", opts.port)
+	logger.Info("session.connected", "baud", opts.baud)
+	logger.Info("session.connected", "data_bits", opts.dataBits)
+	logger.Info("session.connected", "parity", opts.parity)
+	logger.Info("session.connected", "stop_bits", opts.stopBits)
 	var frontend session.Frontend
-	var sessionLogger session.Logger = logger
+	sessionLogger := logger
 	if opts.tui {
 		logger.Info("session.ready", "help", "Ctrl-P", "quit", "Ctrl-C")
 		// The TUI renders transfer status itself; background stderr writes would
@@ -157,7 +154,7 @@ func runConn(ctx context.Context, opts connOptions) error {
 			Terminal:   rawui.NewOSTerminal(os.Stdin),
 			Input:      os.Stdin,
 			Output:     os.Stdout,
-			Local:      os.Stderr,
+			Local:      logger,
 			TimeFormat: opts.timeFormat,
 		})
 	}

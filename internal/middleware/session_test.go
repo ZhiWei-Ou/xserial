@@ -160,7 +160,6 @@ func TestSessionReconnectsAfterSuccessfulInitialConnection(t *testing.T) {
 	disconnectErr := errors.New("device unplugged")
 	first := &errorPort{err: disconnectErr}
 	second := newBlockingPort()
-	logger := newRecordingLogger()
 	var attempts atomic.Int32
 	open := func() (SerialPort, error) {
 		if attempts.Add(1) == 1 {
@@ -169,27 +168,21 @@ func TestSessionReconnectsAfterSuccessfulInitialConnection(t *testing.T) {
 		return second, nil
 	}
 	frontend := frontendFunc(func(ctx context.Context, endpoint Endpoint) error {
-		_ = endpoint.Events()
-		for {
-			select {
-			case event := <-logger.notifications:
-				if event != "session.reconnected" {
-					continue
-				}
+		for event := range endpoint.Events() {
+			if _, ok := event.(Reconnected); ok {
 				if err := endpoint.Send(ctx, []byte("connected again")); err != nil {
 					return err
 				}
 				endpoint.Quit()
 				return nil
-			case <-ctx.Done():
-				return nil
 			}
 		}
+		return nil
 	})
 
 	err := New(Config{
 		Port: first, Reconnect: open, ReconnectInterval: time.Nanosecond,
-		Frontend: frontend, Logger: logger,
+		Frontend: frontend,
 	}).Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -200,19 +193,13 @@ func TestSessionReconnectsAfterSuccessfulInitialConnection(t *testing.T) {
 	if got := second.Written(); got != "connected again" {
 		t.Fatalf("reconnected serial output = %q", got)
 	}
-	wantEvents := []string{"session.disconnected", "session.reconnect_failed", "session.reconnected"}
-	if got := logger.Events(); !equalStrings(got, wantEvents) {
-		t.Fatalf("log events = %v, want %v", got, wantEvents)
-	}
 }
 
 func TestSessionQuitCancelsReconnectWait(t *testing.T) {
-	logger := newRecordingLogger()
 	var attempts atomic.Int32
 	frontend := frontendFunc(func(ctx context.Context, endpoint Endpoint) error {
-		_ = endpoint.Events()
-		for event := range logger.notifications {
-			if event == "session.disconnected" {
+		for event := range endpoint.Events() {
+			if _, ok := event.(Disconnected); ok {
 				endpoint.Quit()
 				return nil
 			}
@@ -228,7 +215,6 @@ func TestSessionQuitCancelsReconnectWait(t *testing.T) {
 		},
 		ReconnectInterval: time.Hour,
 		Frontend:          frontend,
-		Logger:            logger,
 	}).Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -273,86 +259,6 @@ func TestUploadExcludesNormalWritesAndFinishesBeforeRunReturns(t *testing.T) {
 	if port.concurrentWrite {
 		t.Fatal("serial port observed concurrent writes")
 	}
-}
-
-func TestSessionLogsTransferResultAfterFrontendAcknowledgesCompletion(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "firmware.bin")
-	if err := os.WriteFile(file, []byte("firmware"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	logger := &orderedLogger{events: make(chan string, 1)}
-	frontend := frontendFunc(func(ctx context.Context, endpoint Endpoint) error {
-		if err := endpoint.StartUpload(ctx, file); err != nil {
-			return err
-		}
-		for event := range endpoint.Events() {
-			finished, ok := event.(UploadFinished)
-			if !ok {
-				continue
-			}
-			select {
-			case logged := <-logger.events:
-				return errors.New("transfer result logged before frontend rendered completion: " + logged)
-			default:
-			}
-			finished.Acknowledge()
-			if logged := <-logger.events; logged != "transfer.upload_completed" {
-				return errors.New("unexpected log event: " + logged)
-			}
-			endpoint.Quit()
-			return nil
-		}
-		return nil
-	})
-
-	if err := New(Config{Port: newBlockingPort(), Frontend: frontend, Logger: logger}).Run(context.Background()); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-}
-
-type orderedLogger struct {
-	events chan string
-}
-
-func (l *orderedLogger) Info(event string, _ ...any) { l.events <- event }
-func (l *orderedLogger) Warn(event string, _ ...any) { l.events <- event }
-
-type recordingLogger struct {
-	mu            sync.Mutex
-	events        []string
-	notifications chan string
-}
-
-func newRecordingLogger() *recordingLogger {
-	return &recordingLogger{notifications: make(chan string, 16)}
-}
-
-func (l *recordingLogger) Info(event string, _ ...any) { l.record(event) }
-func (l *recordingLogger) Warn(event string, _ ...any) { l.record(event) }
-
-func (l *recordingLogger) record(event string) {
-	l.mu.Lock()
-	l.events = append(l.events, event)
-	l.mu.Unlock()
-	l.notifications <- event
-}
-
-func (l *recordingLogger) Events() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return append([]string(nil), l.events...)
-}
-
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func TestSessionRunsYMODEMUploadThroughSharedSerialReaderAndWriter(t *testing.T) {
