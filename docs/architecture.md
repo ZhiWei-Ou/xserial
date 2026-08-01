@@ -34,7 +34,7 @@ flowchart TB
 
 各层职责：
 
-- `cmd/xserial` 只处理进程生命周期；`internal/cmd` 在无位置参数时列举串口，有位置参数时直接组装连接，并负责校验配置、选择 frontend 和创建依赖。
+- `cmd/xserial` 只处理进程生命周期；`internal/cmd` 在无位置参数时显示帮助，通过 `list` 子命令列举串口，有位置参数时直接组装连接，并负责校验配置、选择 frontend 和创建依赖。
 - `internal/backend` 只负责串口连接、单 reader、单 writer、断线检测、有限重连和关闭，不认识 frontend、传输协议或 Cobra。
 - `internal/middleware` 是应用编排层。它把 backend 字节包装为 `Envelope`，经过双向 Pipeline 后交给 frontend；传输能力也在这一层获得方向独占权。
 - `rawui` 与 `tui` 只通过 `middleware.Endpoint` 发送命令和消费事件，不直接持有串口。

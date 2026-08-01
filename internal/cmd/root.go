@@ -34,23 +34,17 @@ func NewRootCommand() *cobra.Command {
 func newRootCommand(deps rootDependencies) *cobra.Command {
 	version := currentVersion()
 	var flags connFlags
-	var showVersion bool
 
 	rootCmd := &cobra.Command{
 		Use:           "xserial [port] [baud]",
 		Short:         "Cross-platform serial terminal",
 		Example:       directConnExamples,
-		Version:       version,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if showVersion {
-				fmt.Fprintln(cmd.OutOrStdout(), version)
-				return nil
-			}
 			if len(args) == 0 {
-				return runList(cmd, deps.list)
+				return cmd.Help()
 			}
 			if flags.reconnectAttempts < 0 {
 				return errors.New("reconnect attempts must be non-negative")
@@ -65,9 +59,8 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 	}
 
 	rootCmd.SetHelpTemplate(fmt.Sprintf(asciiPrefix, version) + "\n" + rootCmd.HelpTemplate())
-	rootCmd.SetVersionTemplate("{{.Version}}\n")
 	bindConnFlags(rootCmd, &flags)
-	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "show version")
+	rootCmd.AddCommand(newListCommand(deps.list))
 	rootCmd.AddCommand(newVersionCommand(version))
 	return rootCmd
 }

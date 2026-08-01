@@ -26,7 +26,7 @@ go install github.com/ZhiWei-Ou/xserial/cmd/xserial@latest
 确保 Go 的 bin 目录已经加入 `PATH`。通常可以这样检查：
 
 ```bash
-xserial --version
+xserial version
 ```
 
 ## 快速开始
@@ -34,7 +34,7 @@ xserial --version
 先查看系统中的串口：
 
 ```bash
-xserial
+xserial list
 ```
 
 然后连接设备：
@@ -44,7 +44,7 @@ xserial /dev/ttyUSB0
 xserial /dev/ttyUSB0 9600 --tui
 ```
 
-任意位置参数都会被视为串口名；xserial 不再猜测端口是否符合平台命名规则。
+除工具子命令外，位置参数都会被视为串口名；xserial 不猜测端口是否符合平台命名规则。
 
 macOS 上的端口通常类似：
 
@@ -251,7 +251,7 @@ ls -l /dev/ttyUSB0
 先运行：
 
 ```bash
-xserial
+xserial list
 ```
 
 如果设备刚插入，可以在插入前后分别运行一次，对比新增的端口。USB 串口通常还会显示 VID、PID、序列号或产品名称。

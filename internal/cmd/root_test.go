@@ -33,7 +33,35 @@ func TestVersionUsesReleaseBuildValue(t *testing.T) {
 	}
 }
 
-func TestRootWithoutPositionalsListsPorts(t *testing.T) {
+func TestRootWithoutPositionalsShowsHelp(t *testing.T) {
+	listed := false
+	connected := false
+	cmd := newRootCommand(rootDependencies{
+		list: func() ([]serialport.Info, error) {
+			listed = true
+			return nil, nil
+		},
+		conn: func(context.Context, connOptions) error {
+			connected = true
+			return nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs(nil)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if listed || connected {
+		t.Fatalf("listed=%v connected=%v", listed, connected)
+	}
+	if !strings.Contains(output.String(), "Usage:") || !strings.Contains(output.String(), "list") {
+		t.Fatalf("help output = %q", output.String())
+	}
+}
+
+func TestListCommandListsPorts(t *testing.T) {
 	connected := false
 	cmd := newRootCommand(rootDependencies{
 		list: func() ([]serialport.Info, error) {
@@ -46,7 +74,7 @@ func TestRootWithoutPositionalsListsPorts(t *testing.T) {
 	})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	cmd.SetArgs(nil)
+	cmd.SetArgs([]string{"list"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -75,8 +103,8 @@ func TestRootTreatsAnyPositionalAsPort(t *testing.T) {
 	}
 }
 
-func TestRemovedCommandWordsAreOrdinaryPortNames(t *testing.T) {
-	for _, port := range []string{"conn", "list", "lsit"} {
+func TestUnrecognizedCommandWordsAreOrdinaryPortNames(t *testing.T) {
+	for _, port := range []string{"conn", "lsit"} {
 		t.Run(port, func(t *testing.T) {
 			var got string
 			cmd := newRootCommand(rootDependencies{
@@ -94,7 +122,7 @@ func TestRemovedCommandWordsAreOrdinaryPortNames(t *testing.T) {
 	}
 }
 
-func TestRootHelpAndVersionRoutes(t *testing.T) {
+func TestRootHelpRoutes(t *testing.T) {
 	for _, args := range [][]string{{"-h"}, {"--help"}, {"help"}} {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			cmd := NewRootCommand()
@@ -109,18 +137,27 @@ func TestRootHelpAndVersionRoutes(t *testing.T) {
 			}
 		})
 	}
+}
 
-	for _, args := range [][]string{{"-v"}, {"--version"}, {"version"}} {
-		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+func TestVersionCommandIsTheOnlyVersionRoute(t *testing.T) {
+	cmd := NewRootCommand()
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"version"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if strings.TrimSpace(output.String()) != currentVersion() {
+		t.Fatalf("version output = %q", output.String())
+	}
+
+	for _, arg := range []string{"-v", "--version"} {
+		t.Run(arg, func(t *testing.T) {
 			cmd := NewRootCommand()
-			var output bytes.Buffer
-			cmd.SetOut(&output)
-			cmd.SetArgs(args)
-			if err := cmd.Execute(); err != nil {
-				t.Fatalf("Execute() error = %v", err)
-			}
-			if strings.TrimSpace(output.String()) != currentVersion() {
-				t.Fatalf("version output = %q", output.String())
+			cmd.SetArgs([]string{arg})
+			if err := cmd.Execute(); err == nil {
+				t.Fatalf("Execute() with %s succeeded, want unknown flag error", arg)
 			}
 		})
 	}

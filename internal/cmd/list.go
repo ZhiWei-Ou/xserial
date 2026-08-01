@@ -7,6 +7,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func newListCommand(list func() ([]serialport.Info, error)) *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List available serial ports",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runList(cmd, list)
+		},
+	}
+}
+
 func runList(cmd *cobra.Command, list func() ([]serialport.Info, error)) error {
 	ports, err := list()
 	if err != nil {
