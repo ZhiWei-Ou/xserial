@@ -126,6 +126,20 @@ func TestRootHelpAndVersionRoutes(t *testing.T) {
 	}
 }
 
+func TestRootHelpShowsCompactXserialLogo(t *testing.T) {
+	cmd := NewRootCommand()
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(output.String(), `\ \/ /___  ___ _ __(_) __ _| |`) {
+		t.Fatalf("help output does not contain compact Xserial logo: %q", output.String())
+	}
+}
+
 func TestRootHelpShowsDirectConnectionExample(t *testing.T) {
 	if directConnExamples == "" {
 		t.Skip("direct connection example is not available on this platform")
