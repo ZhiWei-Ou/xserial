@@ -14,12 +14,12 @@ RawUI 通过 [Middleware](middleware.md) 使用 [Backend](backend.md)，不直�
 - 使用以下唯一连接形式：
 
   ```text
-  xserial <port> [baud]
+  xserial <port> [cfg]
   ```
 
 - 完全没有位置参数时显示帮助；使用 `list` 子命令列出可用串口，其他位置参数直接视为端口名。
 - `help`、`list`、`version` 和 `completion` 是工具命令；不提供 `conn` 子命令。
-- 继续支持 `-c|--cfg data-bits,parity,stop-bits`，默认 `115200 / 8,N,1`。
+- cfg 按 `baud,data-bits,parity,stop-bits` 排列并允许从右侧省略，默认补全为 `115200,8,N,1`；不提供 `-c|--cfg`。
 - 保留现有 prefix key 和本地命令，不要求用户重新学习基本操作。
 
 ## 文本与 Shell 交互

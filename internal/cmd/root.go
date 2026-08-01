@@ -36,7 +36,7 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 	var flags connFlags
 
 	rootCmd := &cobra.Command{
-		Use:           "xserial [port] [baud]",
+		Use:           "xserial [port] [cfg]",
 		Short:         "Cross-platform serial terminal",
 		Example:       directConnExamples,
 		SilenceErrors: true,
@@ -49,7 +49,7 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 			if flags.reconnectAttempts < 0 {
 				return errors.New("reconnect attempts must be non-negative")
 			}
-			opts, err := parseConnOptions(args, flags.cfg, flags.logPath, flags.timeFormat, flags.useTUI)
+			opts, err := parseConnOptions(args, flags.logPath, flags.timeFormat, flags.useTUI)
 			if err != nil {
 				return err
 			}

@@ -58,7 +58,7 @@ Windows 可以直接使用 COM 端口：
 xserial COM3
 ```
 
-默认波特率是 `115200`。需要其他波特率时，把它放在端口后面：
+默认串口配置是 `115200,8,N,1`。需要其他波特率时，把它作为配置的第一项放在端口后面：
 
 ```bash
 xserial /dev/ttyUSB0 9600
@@ -145,24 +145,29 @@ AA,01,FF,00,7E
 连接格式是：
 
 ```text
-xserial <port> [baud]
+xserial <port> [cfg]
 ```
 
-数据位、校验位和停止位通过 `-c` 或 `--cfg` 设置：
-
-```bash
-xserial /dev/ttyUSB0 57600 -c 7,E,1
-```
-
-配置格式为：
+配置按以下顺序排列：
 
 ```text
-data-bits,parity,stop-bits
+baud,data-bits,parity,stop-bits
+```
+
+可以从右侧省略未指定的字段，省略部分使用 `115200,8,N,1` 中的对应默认值：
+
+```bash
+xserial /dev/ttyUSB0
+xserial /dev/ttyUSB0 9600
+xserial /dev/ttyUSB0 9600,7
+xserial /dev/ttyUSB0 9600,7,E
+xserial /dev/ttyUSB0 9600,7,E,2
 ```
 
 - parity：`N`、`O`、`E`、`M`、`S`；
 - stop bits：`1`、`1.5`、`2`；
-- 默认值：`8,N,1`。
+- 默认配置：`115200,8,N,1`；
+- 不支持用空字段跳过中间配置，例如 `9600,,E`。
 
 连接断开后默认尝试重连 5 次，每次间隔 1 秒。可以指定次数，或用 `0` 禁用：
 

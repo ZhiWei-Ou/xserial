@@ -84,7 +84,7 @@ func TestListCommandListsPorts(t *testing.T) {
 	}
 }
 
-func TestRootTreatsAnyPositionalAsPort(t *testing.T) {
+func TestRootConnectsFromPositionalConfig(t *testing.T) {
 	var got connOptions
 	cmd := newRootCommand(rootDependencies{
 		list: func() ([]serialport.Info, error) { return nil, nil },
@@ -93,12 +93,12 @@ func TestRootTreatsAnyPositionalAsPort(t *testing.T) {
 			return nil
 		},
 	})
-	cmd.SetArgs([]string{"custom-port", "9600", "--tui"})
+	cmd.SetArgs([]string{"custom-port", "9600,7,e,2", "--tui"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if got.port != "custom-port" || got.baud != 9600 || !got.tui {
+	if got.port != "custom-port" || got.baud != 9600 || got.dataBits != 7 || got.parity != "even" || got.stopBits != "2" || !got.tui {
 		t.Fatalf("connection options = %#v", got)
 	}
 }

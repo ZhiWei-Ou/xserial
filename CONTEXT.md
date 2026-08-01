@@ -12,4 +12,4 @@
   connection parameters are emitted as separate log entries.
 - Application logs use `internal/logging`; leveled calls go through its
   formatter and filter, while raw local UI output bypasses both.
-- The CLI shows help with no positional arguments, lists ports with `xserial list`, reports its version only through `xserial version`, and connects with `xserial <port> [baud]`; it has no `conn` subcommand or version flag.
+- The CLI shows help with no positional arguments, lists ports with `xserial list`, reports its version only through `xserial version`, and connects with `xserial <port> [cfg]`; positional cfg is `baud[,data-bits[,parity[,stop-bits]]]` with defaults `115200,8,N,1`.

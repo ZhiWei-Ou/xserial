@@ -18,7 +18,7 @@ xserial 是串口终端工具，不是串口库或协议框架。默认工作模
 - 交互会话默认使用终端 raw mode；本地输出必须使用 `CRLF`，以保证光标回到行首。
 - `Ctrl-P` 是默认 prefix key。prefix 后的按键属于本地命令；`Ctrl-P Ctrl-P` 向设备发送字节 `0x10`。架构上保留运行时替换 prefix key 的能力，但当前不提供对应 UI。
 - raw upload 是字节透传，不承诺校验、重传或断点续传。可靠传输应作为明确命名的独立能力或协议实现。
-- 连接命令保持 screen 风格的紧凑 interface：`xserial conn <port> [baud]`，波特率默认 `115200`，其他帧参数通过 `-c|--cfg data-bits,parity,stop-bits` 设置，默认 `8,N,1`。
+- 连接命令保持 screen 风格的紧凑 interface：`xserial <port> [cfg]`。cfg 按 `baud,data-bits,parity,stop-bits` 排列并允许从右侧省略，默认补全为 `115200,8,N,1`。
 
 ## 架构方向
 

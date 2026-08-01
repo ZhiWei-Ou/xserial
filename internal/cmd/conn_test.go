@@ -18,8 +18,13 @@ func TestConnShowsOnlyCurrentPlatformExamples(t *testing.T) {
 	if !supported {
 		want = "<port>"
 	}
-	if !strings.Contains(cmd.Example, "xserial "+want) {
-		t.Fatalf("Example = %q, want port %q", cmd.Example, want)
+	wantExample := "xserial " + want + " 9600,8,n,1"
+	if !strings.Contains(cmd.Example, wantExample) {
+		t.Fatalf("Example = %q, want %q", cmd.Example, wantExample)
+	}
+	wantTUIExample := "xserial " + want + " --tui"
+	if !strings.Contains(cmd.Example, wantTUIExample) {
+		t.Fatalf("Example = %q, want %q", cmd.Example, wantTUIExample)
 	}
 	for platform, port := range examples {
 		if platform != runtime.GOOS && strings.Contains(cmd.Example, port) {
@@ -28,18 +33,14 @@ func TestConnShowsOnlyCurrentPlatformExamples(t *testing.T) {
 	}
 }
 
-func TestConnExposesCombinedSerialConfig(t *testing.T) {
+func TestConnDoesNotExposeSerialConfigFlags(t *testing.T) {
 	cmd := NewRootCommand()
 
-	flag := cmd.Flags().Lookup("cfg")
-	if flag == nil {
-		t.Fatal("--cfg flag not found")
+	if flag := cmd.Flags().Lookup("cfg"); flag != nil {
+		t.Fatal("--cfg flag exists, want nil")
 	}
-	if flag.Shorthand != "c" {
-		t.Fatalf("--cfg shorthand = %q, want c", flag.Shorthand)
-	}
-	if flag.DefValue != "8,N,1" {
-		t.Fatalf("--cfg default = %q, want 8,N,1", flag.DefValue)
+	if flag := cmd.Flags().ShorthandLookup("c"); flag != nil {
+		t.Fatal("-c shorthand exists, want nil")
 	}
 
 	for _, name := range []string{"baud", "data-bits", "parity", "stop-bits"} {
@@ -125,7 +126,7 @@ func TestConnDoesNotExposePortFlag(t *testing.T) {
 }
 
 func TestParseConnOptionsUsesScreenStyleDefaults(t *testing.T) {
-	opts, err := parseConnOptions([]string{"/dev/ttyUSB0"}, "8,N,1", "", "", false)
+	opts, err := parseConnOptions([]string{"/dev/ttyUSB0"}, "", "", false)
 	if err != nil {
 		t.Fatalf("parseConnOptions() error = %v", err)
 	}
@@ -135,30 +136,41 @@ func TestParseConnOptionsUsesScreenStyleDefaults(t *testing.T) {
 	}
 }
 
-func TestParseConnOptionsAcceptsBaudAndLowercaseParity(t *testing.T) {
-	opts, err := parseConnOptions([]string{"COM3", "9600"}, "7,e,2", "capture.log", "15:04:05", true)
-	if err != nil {
-		t.Fatalf("parseConnOptions() error = %v", err)
+func TestParseConnOptionsAcceptsPartialPositionalConfig(t *testing.T) {
+	tests := []struct {
+		cfg      string
+		baud     int
+		dataBits int
+		parity   string
+		stopBits string
+	}{
+		{cfg: "9600", baud: 9600, dataBits: 8, parity: "none", stopBits: "1"},
+		{cfg: "9600,8", baud: 9600, dataBits: 8, parity: "none", stopBits: "1"},
+		{cfg: "9600,8,n", baud: 9600, dataBits: 8, parity: "none", stopBits: "1"},
+		{cfg: "9600,8,n,1", baud: 9600, dataBits: 8, parity: "none", stopBits: "1"},
+		{cfg: "57600,7,e,2", baud: 57600, dataBits: 7, parity: "even", stopBits: "2"},
 	}
 
-	if opts.baud != 9600 || opts.dataBits != 7 || opts.parity != "even" || opts.stopBits != "2" {
-		t.Fatalf("parseConnOptions() = %#v, want 9600 7E2", opts)
-	}
-	if opts.logPath != "capture.log" {
-		t.Fatalf("log path = %q, want capture.log", opts.logPath)
-	}
-	if opts.timeFormat != "15:04:05" {
-		t.Fatalf("time format = %q, want 15:04:05", opts.timeFormat)
-	}
-	if !opts.tui {
-		t.Fatal("tui = false, want true")
+	for _, tt := range tests {
+		t.Run(tt.cfg, func(t *testing.T) {
+			opts, err := parseConnOptions([]string{"COM3", tt.cfg}, "capture.log", "15:04:05", true)
+			if err != nil {
+				t.Fatalf("parseConnOptions() error = %v", err)
+			}
+			if opts.baud != tt.baud || opts.dataBits != tt.dataBits || opts.parity != tt.parity || opts.stopBits != tt.stopBits {
+				t.Fatalf("parseConnOptions() = %#v", opts)
+			}
+			if opts.logPath != "capture.log" || opts.timeFormat != "15:04:05" || !opts.tui {
+				t.Fatalf("parseConnOptions() = %#v, want log, time, and TUI options preserved", opts)
+			}
+		})
 	}
 }
 
 func TestParseConnOptionsRejectsInvalidConfig(t *testing.T) {
-	for _, cfg := range []string{"8,N", "8,X,1", "8,N,3"} {
+	for _, cfg := range []string{"", "0", "baud", "9600,", "9600,0", "9600,8,X", "9600,8,N,3", "9600,8,N,1,extra"} {
 		t.Run(cfg, func(t *testing.T) {
-			if _, err := parseConnOptions([]string{"COM3"}, cfg, "", "", false); err == nil {
+			if _, err := parseConnOptions([]string{"COM3", cfg}, "", "", false); err == nil {
 				t.Fatalf("parseConnOptions(%q) error = nil, want error", cfg)
 			}
 		})

@@ -30,7 +30,6 @@ type connOptions struct {
 }
 
 type connFlags struct {
-	cfg               string
 	logPath           string
 	timeFormat        string
 	useTUI            bool
@@ -43,7 +42,6 @@ const (
 )
 
 func bindConnFlags(cmd *cobra.Command, flags *connFlags) {
-	cmd.Flags().StringVarP(&flags.cfg, "cfg", "c", "8,N,1", "serial frame as data-bits,parity,stop-bits (example: 8,N|n,1)")
 	cmd.Flags().StringVar(&flags.logPath, "log", "", "append received bytes to file")
 	cmd.Flags().StringVar(&flags.timeFormat, "time", "", "Go time format prepended to each received line")
 	cmd.Flags().Lookup("time").NoOptDefVal = defaultReceiveTimeFormat
@@ -51,53 +49,67 @@ func bindConnFlags(cmd *cobra.Command, flags *connFlags) {
 	cmd.Flags().IntVar(&flags.reconnectAttempts, "reconnect", 5, "number of reconnect attempts after disconnection (0 disables)")
 }
 
-func parseConnOptions(args []string, cfg, logPath, timeFormat string, useTUI bool) (connOptions, error) {
+func parseConnOptions(args []string, logPath, timeFormat string, useTUI bool) (connOptions, error) {
 	opts := connOptions{
 		port:              args[0],
 		baud:              defaultConnBaud,
+		dataBits:          8,
+		parity:            "none",
+		stopBits:          "1",
 		logPath:           logPath,
 		timeFormat:        timeFormat,
 		tui:               useTUI,
 		reconnectAttempts: 5,
 	}
 
-	if len(args) == 2 {
-		baud, err := strconv.Atoi(args[1])
+	if len(args) == 1 {
+		return opts, nil
+	}
+
+	cfg := args[1]
+	fields := strings.Split(cfg, ",")
+	if len(fields) > 4 {
+		return connOptions{}, fmt.Errorf("invalid serial cfg %q: want baud[,data-bits[,parity[,stop-bits]]]", cfg)
+	}
+
+	if len(fields) >= 1 {
+		baud, err := strconv.Atoi(strings.TrimSpace(fields[0]))
 		if err != nil || baud <= 0 {
-			return connOptions{}, fmt.Errorf("invalid baud rate %q", args[1])
+			return connOptions{}, fmt.Errorf("invalid baud rate %q", fields[0])
 		}
 		opts.baud = baud
 	}
 
-	fields := strings.Split(cfg, ",")
-	if len(fields) != 3 {
-		return connOptions{}, fmt.Errorf("invalid serial cfg %q: want data-bits,parity,stop-bits", cfg)
+	if len(fields) >= 2 {
+		dataBits, err := strconv.Atoi(strings.TrimSpace(fields[1]))
+		if err != nil || dataBits <= 0 {
+			return connOptions{}, fmt.Errorf("invalid data bits %q", fields[1])
+		}
+		opts.dataBits = dataBits
 	}
 
-	dataBits, err := strconv.Atoi(strings.TrimSpace(fields[0]))
-	if err != nil || dataBits <= 0 {
-		return connOptions{}, fmt.Errorf("invalid data bits %q", fields[0])
-	}
-	opts.dataBits = dataBits
-
-	switch strings.ToUpper(strings.TrimSpace(fields[1])) {
-	case "N":
-		opts.parity = "none"
-	case "O":
-		opts.parity = "odd"
-	case "E":
-		opts.parity = "even"
-	case "M":
-		opts.parity = "mark"
-	case "S":
-		opts.parity = "space"
-	default:
-		return connOptions{}, fmt.Errorf("invalid parity %q: want N, O, E, M, or S", fields[1])
+	if len(fields) >= 3 {
+		switch strings.ToUpper(strings.TrimSpace(fields[2])) {
+		case "N":
+			opts.parity = "none"
+		case "O":
+			opts.parity = "odd"
+		case "E":
+			opts.parity = "even"
+		case "M":
+			opts.parity = "mark"
+		case "S":
+			opts.parity = "space"
+		default:
+			return connOptions{}, fmt.Errorf("invalid parity %q: want N, O, E, M, or S", fields[2])
+		}
 	}
 
-	opts.stopBits = strings.TrimSpace(fields[2])
-	if opts.stopBits != "1" && opts.stopBits != "1.5" && opts.stopBits != "2" {
-		return connOptions{}, fmt.Errorf("invalid stop bits %q: want 1, 1.5, or 2", fields[2])
+	if len(fields) >= 4 {
+		opts.stopBits = strings.TrimSpace(fields[3])
+		if opts.stopBits != "1" && opts.stopBits != "1.5" && opts.stopBits != "2" {
+			return connOptions{}, fmt.Errorf("invalid stop bits %q: want 1, 1.5, or 2", fields[3])
+		}
 	}
 
 	return opts, nil
