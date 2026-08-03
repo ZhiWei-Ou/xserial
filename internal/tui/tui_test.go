@@ -22,6 +22,8 @@ type fakeEndpoint struct {
 	canceled       bool
 	quit           bool
 	err            error
+	configured     middleware.ConnectionConfig
+	configureErr   error
 }
 
 func newFakeEndpoint() *fakeEndpoint                    { return &fakeEndpoint{events: make(chan middleware.Event, 8)} }
@@ -44,6 +46,10 @@ func (e *fakeEndpoint) StartYMODEMDownload(_ context.Context, dir string) error 
 }
 func (e *fakeEndpoint) CancelTransfer() { e.canceled = true }
 func (e *fakeEndpoint) Quit()           { e.quit = true }
+func (e *fakeEndpoint) Configure(_ context.Context, cfg middleware.ConnectionConfig) error {
+	e.configured = cfg
+	return e.configureErr
+}
 
 func TestTerminalKeysSendImmediatelyAsTerminalBytes(t *testing.T) {
 	endpoint := newFakeEndpoint()
@@ -88,20 +94,20 @@ func TestTerminalInputPreservesKeyOrderWhileSendIsPending(t *testing.T) {
 	}
 }
 
-func TestConnectionEventsUpdateStatus(t *testing.T) {
+func TestConnectionEventsOnlyUpdateIndicator(t *testing.T) {
 	m := newModel(newFakeEndpoint(), Config{})
 	m.handleEvent(middleware.Disconnected{Err: errors.New("device unplugged")})
-	if m.connected || !strings.Contains(m.status, "device unplugged") || !strings.Contains(m.status, "retrying") {
-		t.Fatalf("disconnected status = %q", m.status)
+	if m.connected || m.status != "Ready" {
+		t.Fatalf("connected=%v status=%q after disconnect", m.connected, m.status)
 	}
 	m.handleEvent(middleware.Reconnecting{Attempt: 2, Limit: 5})
-	if !strings.Contains(m.status, "2/5") {
-		t.Fatalf("reconnecting status=%q", m.status)
+	if m.connected || m.status != "Ready" {
+		t.Fatalf("connected=%v status=%q while reconnecting", m.connected, m.status)
 	}
 
 	m.handleEvent(middleware.Reconnected{})
-	if !m.connected || m.status != "Serial port reconnected" {
-		t.Fatalf("reconnected status = %q", m.status)
+	if !m.connected || m.status != "Ready" {
+		t.Fatalf("connected=%v status=%q after reconnect", m.connected, m.status)
 	}
 }
 
@@ -113,8 +119,8 @@ func TestDisconnectedTUIDropsTerminalInput(t *testing.T) {
 	if command != nil || len(endpoint.sent) != 0 {
 		t.Fatal("disconnected TUI attempted to send")
 	}
-	if !strings.Contains(m.status, "disconnected") {
-		t.Fatalf("status=%q", m.status)
+	if m.status != "Ready" {
+		t.Fatalf("status=%q, want Ready", m.status)
 	}
 }
 
@@ -192,6 +198,104 @@ func TestCommandPaletteInvokesRegisteredActions(t *testing.T) {
 	}
 }
 
+func TestCommandPaletteSupportsVimNavigation(t *testing.T) {
+	m := newModel(newFakeEndpoint(), Config{})
+	m.palette = true
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'j', Text: "j"}))
+	if m.paletteIndex != 1 {
+		t.Fatalf("palette index after j = %d, want 1", m.paletteIndex)
+	}
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'k', Text: "k"}))
+	if m.paletteIndex != 0 {
+		t.Fatalf("palette index after k = %d, want 0", m.paletteIndex)
+	}
+}
+
+func TestPrefixCFocusesConfigurationWithoutSendingSerialBytes(t *testing.T) {
+	endpoint := newFakeEndpoint()
+	m := newModel(endpoint, Config{PortName: "/dev/test0", Baud: 115200, Frame: "8,N,1"})
+	m.width, m.height = 100, 28
+
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'p', Mod: tea.ModCtrl}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Text: "c"}))
+	if m.palette || m.focus != focusConfiguration || m.configurationFocusIndex != 0 {
+		t.Fatalf("palette=%v focus=%v index=%d", m.palette, m.focus, m.configurationFocusIndex)
+	}
+	if len(endpoint.sent) != 0 {
+		t.Fatalf("Ctrl+P c sent serial bytes %q", endpoint.sent)
+	}
+}
+
+func TestConfigurationFocusNavigatesAndReturnsFromEditor(t *testing.T) {
+	m := newModel(newFakeEndpoint(), Config{PortName: "/dev/test0", Baud: 115200, Frame: "8,N,1"})
+	m.focus = focusConfiguration
+
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'k', Text: "k"}))
+	if m.configurationFocusIndex != 4 {
+		t.Fatalf("index after wrapped k = %d, want 4", m.configurationFocusIndex)
+	}
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'j', Text: "j"}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	if m.configurationFocusIndex != 3 {
+		t.Fatalf("selected index = %d, want parity index 3", m.configurationFocusIndex)
+	}
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if m.configuration.mode != configurationFrame || m.configuration.index != 1 || !m.configuration.returnToConfiguration {
+		t.Fatalf("editor mode=%v index=%d return=%v", m.configuration.mode, m.configuration.index, m.configuration.returnToConfiguration)
+	}
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
+	if m.configuration.mode != configurationNone || m.focus != focusConfiguration || m.configurationFocusIndex != 3 {
+		t.Fatalf("mode=%v focus=%v index=%d after editor close", m.configuration.mode, m.focus, m.configurationFocusIndex)
+	}
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	if m.focus != focusTerminal {
+		t.Fatalf("focus after Esc = %v, want terminal", m.focus)
+	}
+}
+
+func TestConfigurationApplyReturnsToConfigurationFocus(t *testing.T) {
+	endpoint := newFakeEndpoint()
+	m := newModel(endpoint, Config{PortName: "/dev/test0", Baud: 115200, Frame: "8,N,1"})
+	m.focus, m.configurationFocusIndex = focusConfiguration, 1
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m.configuration.input = []rune("921600")
+	_, apply := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if apply == nil {
+		t.Fatal("baud editor did not apply")
+	}
+	m.Update(apply())
+	if m.focus != focusConfiguration || m.configuration.mode != configurationNone || m.baud != 921600 {
+		t.Fatalf("focus=%v mode=%v baud=%d", m.focus, m.configuration.mode, m.baud)
+	}
+}
+
+func TestQClosesSelectionPopupsButRemainsValidPathInput(t *testing.T) {
+	m := newModel(newFakeEndpoint(), Config{PortName: "/dev/test0", Baud: 115200, Frame: "8,N,1"})
+	m.palette = true
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
+	if m.palette {
+		t.Fatal("q did not close command palette")
+	}
+
+	m.openConfiguration(configurationFrame)
+	m.status = "temporary popup status"
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
+	if m.configuration.mode != configurationNone {
+		t.Fatal("q did not close configuration popup")
+	}
+	if m.status != "Ready" {
+		t.Fatalf("status after closing configuration = %q, want Ready", m.status)
+	}
+
+	m.pathMode = transferRawUpload
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
+	if m.pathMode != transferRawUpload || string(m.input) != "q" {
+		t.Fatalf("path mode = %v, input = %q", m.pathMode, string(m.input))
+	}
+}
+
 func TestDoublePrefixSendsLiteralCtrlP(t *testing.T) {
 	endpoint := newFakeEndpoint()
 	m := newModel(endpoint, Config{})
@@ -242,7 +346,7 @@ func TestViewUsesConfigurationAndTerminalColumns(t *testing.T) {
 	m.lines = []string{"root@board:~# uname -a", "Linux board"}
 
 	plain := ansi.Strip(m.View().Content)
-	for _, want := range []string{"CONFIGURATION", "/dev/ttyUSB0", "115200", "8,N,1", "TERMINAL", "root@board:~# uname -a"} {
+	for _, want := range []string{"CONFIGURATION", "/dev/ttyUSB0", "115200", "DATA BITS", "PARITY", "STOP BITS", "NONE", "TERMINAL", "root@board:~# uname -a"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("split view does not contain %q: %q", want, plain)
 		}
@@ -276,6 +380,35 @@ func TestViewUsesConfigurationAndTerminalColumns(t *testing.T) {
 	if strings.Contains(body, "CONNECTION") || strings.Contains(body, "SESSION") {
 		t.Fatalf("connection or session remains in sidebar: %q", body)
 	}
+	if strings.Contains(body, "FRAME") {
+		t.Fatalf("combined frame field remains in sidebar: %q", body)
+	}
+	if strings.Contains(body, "›") {
+		t.Fatalf("sidebar still contains click arrows: %q", body)
+	}
+}
+
+func TestExpandedFrameFieldsOpenTheirMatchingEditorRow(t *testing.T) {
+	m := newModel(newFakeEndpoint(), Config{PortName: "/dev/test0", Baud: 115200, Frame: "8,N,1"})
+	handler := mainMouseHandler(true, 25, 26, 74, 27)
+	for _, test := range []struct {
+		y, want int
+	}{
+		{y: 7, want: 0},
+		{y: 9, want: 1},
+		{y: 11, want: 2},
+	} {
+		click := tea.MouseClickMsg(tea.Mouse{X: 2, Y: test.y, Button: tea.MouseLeft})
+		command := handler(click)
+		if command == nil {
+			t.Fatalf("click at y=%d was ignored", test.y)
+		}
+		m.Update(command())
+		if m.configuration.mode != configurationFrame || m.configuration.index != test.want {
+			t.Fatalf("click at y=%d opened mode=%v index=%d, want frame index=%d", test.y, m.configuration.mode, m.configuration.index, test.want)
+		}
+		m.configuration = configurationState{}
+	}
 }
 
 func TestViewShowsSteadyCursorAfterTerminalText(t *testing.T) {
@@ -298,6 +431,47 @@ func TestViewShowsSteadyCursorAfterTerminalText(t *testing.T) {
 	m.palette = true
 	if cursor := m.View().Cursor; cursor != nil {
 		t.Fatalf("cursor remains visible behind command palette: %#v", cursor)
+	}
+}
+
+func TestConfigurationFocusHighlightsFieldAndTerminalClickRestoresCursor(t *testing.T) {
+	m := newModel(newFakeEndpoint(), Config{PortName: "/dev/test0", Baud: 115200, Frame: "8,N,1"})
+	m.width, m.height = 100, 28
+	m.appendTerminalData([]byte("root# "))
+	m.focus, m.configurationFocusIndex = focusConfiguration, 3
+
+	view := m.View()
+	if view.Cursor != nil {
+		t.Fatalf("terminal cursor remains visible during configuration focus: %#v", view.Cursor)
+	}
+	plain := ansi.Strip(view.Content)
+	focusedLabel := m.renderSidebarField(3, "PARITY", "NONE")[0]
+	m.focus = focusTerminal
+	normalLabel := m.renderSidebarField(3, "PARITY", "NONE")[0]
+	m.focus = focusConfiguration
+	if !strings.Contains(plain, "j/k select") || focusedLabel == normalLabel {
+		t.Fatalf("configuration focus is not visible: %q", plain)
+	}
+	terminalX := sidebarWidthFor(m.width) + 4
+	click := tea.MouseClickMsg(tea.Mouse{X: terminalX, Y: 5, Button: tea.MouseLeft})
+	command := view.OnMouse(click)
+	if command == nil {
+		t.Fatal("terminal click was ignored")
+	}
+	m.Update(command())
+	if m.focus != focusTerminal || m.View().Cursor == nil {
+		t.Fatalf("focus=%v cursor=%#v after terminal click", m.focus, m.View().Cursor)
+	}
+}
+
+func TestTerminalKeysRemainTransparentAfterLeavingConfigurationFocus(t *testing.T) {
+	endpoint := newFakeEndpoint()
+	m := newModel(endpoint, Config{})
+	m.focus = focusConfiguration
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
+	sendTerminalKey(t, m, tea.Key{Code: 'c', Text: "c"})
+	if len(endpoint.sent) != 1 || !bytes.Equal(endpoint.sent[0], []byte("c")) {
+		t.Fatalf("terminal sends = %q", endpoint.sent)
 	}
 }
 
@@ -332,6 +506,176 @@ func TestTrackpadWheelScrollsOnlyTerminalPanel(t *testing.T) {
 	outside := tea.MouseWheelMsg(tea.Mouse{X: 2, Y: 5, Button: tea.MouseWheelUp})
 	if command := view.OnMouse(outside); command != nil {
 		t.Fatal("configuration-panel wheel affected terminal scroll")
+	}
+}
+
+func TestConfigurationSidebarClickSelectsLivePortAndApplies(t *testing.T) {
+	endpoint := newFakeEndpoint()
+	m := newModel(endpoint, Config{
+		PortName: "/dev/test0", Baud: 115200, Frame: "8,N,1",
+		ListPorts: func() ([]PortOption, error) {
+			return []PortOption{{Name: "/dev/test1"}, {Name: "/dev/test0"}}, nil
+		},
+	})
+	m.width, m.height = 100, 28
+
+	view := m.View()
+	click := tea.MouseClickMsg(tea.Mouse{X: 2, Y: 4, Button: tea.MouseLeft})
+	open := view.OnMouse(click)
+	if open == nil {
+		t.Fatal("port field click was ignored")
+	}
+	_, load := m.Update(open())
+	if m.configuration.mode != configurationPort || load == nil {
+		t.Fatalf("configuration mode = %v, load = %v", m.configuration.mode, load)
+	}
+	m.Update(load())
+	if len(m.configuration.ports) != 2 || m.configuration.ports[m.configuration.index].Name != "/dev/test0" {
+		t.Fatalf("ports = %#v, index = %d", m.configuration.ports, m.configuration.index)
+	}
+
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	_, apply := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if apply == nil {
+		t.Fatal("selected port was not applied")
+	}
+	m.Update(apply())
+	if endpoint.configured.PortName != "/dev/test1" || m.portName != "/dev/test1" {
+		t.Fatalf("endpoint config = %#v, model port = %q", endpoint.configured, m.portName)
+	}
+}
+
+func TestPortRefreshPreservesSelectionAndAddsNewPorts(t *testing.T) {
+	m := newModel(newFakeEndpoint(), Config{
+		PortName: "/dev/test0", Baud: 115200, Frame: "8,N,1",
+		ListPorts: func() ([]PortOption, error) { return nil, nil },
+	})
+	m.openConfiguration(configurationPort)
+	m.handlePortsLoaded(portsLoadedMsg{ports: []PortOption{{Name: "/dev/test0"}, {Name: "/dev/test1"}}})
+	m.configuration.index = 1
+	m.handlePortsLoaded(portsLoadedMsg{ports: []PortOption{{Name: "/dev/test2"}, {Name: "/dev/test1"}}})
+
+	if len(m.configuration.ports) != 2 || m.configuration.ports[m.configuration.index].Name != "/dev/test1" {
+		t.Fatalf("refreshed ports = %#v, index = %d", m.configuration.ports, m.configuration.index)
+	}
+}
+
+func TestPortConfigurationSupportsVimNavigation(t *testing.T) {
+	m := newModel(newFakeEndpoint(), Config{PortName: "/dev/test0", Baud: 115200, Frame: "8,N,1"})
+	m.configuration = configurationState{
+		mode:  configurationPort,
+		ports: []PortOption{{Name: "/dev/test0"}, {Name: "/dev/test1"}},
+	}
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'j', Text: "j"}))
+	if m.configuration.index != 1 {
+		t.Fatalf("port index after j = %d, want 1", m.configuration.index)
+	}
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'k', Text: "k"}))
+	if m.configuration.index != 0 {
+		t.Fatalf("port index after k = %d, want 0", m.configuration.index)
+	}
+}
+
+func TestPortPopupKeepsNameOnOneLineAndMovesDetailsBelowList(t *testing.T) {
+	m := newModel(newFakeEndpoint(), Config{PortName: "/dev/cu.usbmodem1102", Baud: 115200, Frame: "8,N,1"})
+	m.configuration = configurationState{
+		mode: configurationPort,
+		ports: []PortOption{{
+			Name:   "/dev/cu.usbmodem1102",
+			Detail: "vid=0483 pid=3754 serial=0045002D353 product=STM32 Virtual COM Port",
+		}},
+	}
+
+	plain := ansi.Strip(m.renderPortPopup(48))
+	var portLine string
+	for _, line := range strings.Split(plain, "\n") {
+		if strings.Contains(line, "/dev/cu.usbmodem1102") {
+			portLine = line
+			break
+		}
+	}
+	if portLine == "" || strings.Contains(portLine, "vid=") || !strings.Contains(plain, "DETAILS") || !strings.Contains(plain, "vid=0483") {
+		t.Fatalf("port popup = %q", plain)
+	}
+	details := portDetailLines(strings.Repeat("device-info ", 20), 24)
+	if len(details) != 2 || lipgloss.Width(details[0]) > 24 || lipgloss.Width(details[1]) > 24 {
+		t.Fatalf("detail lines = %#v", details)
+	}
+}
+
+func TestBaudConfigurationAcceptsArbitraryPositiveRate(t *testing.T) {
+	endpoint := newFakeEndpoint()
+	m := newModel(endpoint, Config{PortName: "/dev/test0", Baud: 115200, Frame: "8,N,1"})
+	m.openConfiguration(configurationBaud)
+	for range len("115200") {
+		m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
+	}
+	m.Update(tea.KeyPressMsg(tea.Key{Code: '9', Text: "921600"}))
+	_, apply := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m.Update(apply())
+	if endpoint.configured.BaudRate != 921600 || m.baud != 921600 {
+		t.Fatalf("endpoint config = %#v, model baud = %d", endpoint.configured, m.baud)
+	}
+}
+
+func TestFrameConfigurationEditsEachFieldBeforeApply(t *testing.T) {
+	endpoint := newFakeEndpoint()
+	m := newModel(endpoint, Config{PortName: "/dev/test0", Baud: 115200, Frame: "8,N,1"})
+	m.openConfiguration(configurationFrame)
+
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	_, apply := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m.Update(apply())
+
+	got := endpoint.configured
+	if got.DataBits != 7 || got.Parity != "odd" || got.StopBits != "1.5" || m.frameName() != "7,O,1.5" {
+		t.Fatalf("frame config = %#v, display = %q", got, m.frameName())
+	}
+}
+
+func TestFrameConfigurationSupportsVimNavigation(t *testing.T) {
+	m := newModel(newFakeEndpoint(), Config{PortName: "/dev/test0", Baud: 115200, Frame: "8,N,1"})
+	m.openConfiguration(configurationFrame)
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'h', Text: "h"}))
+	if m.configuration.draft.DataBits != 7 {
+		t.Fatalf("data bits after h = %d, want 7", m.configuration.draft.DataBits)
+	}
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'j', Text: "j"}))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'l', Text: "l"}))
+	if m.configuration.index != 1 || m.configuration.draft.Parity != "odd" {
+		t.Fatalf("frame index = %d, parity after j/l = %q", m.configuration.index, m.configuration.draft.Parity)
+	}
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'k', Text: "k"}))
+	if m.configuration.index != 0 {
+		t.Fatalf("frame index after k = %d, want 0", m.configuration.index)
+	}
+}
+
+func TestBaudInputKeepsVimKeysAsTextInput(t *testing.T) {
+	m := newModel(newFakeEndpoint(), Config{PortName: "/dev/test0", Baud: 115200, Frame: "8,N,1"})
+	m.openConfiguration(configurationBaud)
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 'j', Text: "j"}))
+	if got := string(m.configuration.input); got != "115200" {
+		t.Fatalf("baud input after j = %q, want unchanged numeric input", got)
+	}
+}
+
+func TestConfigurationFailureKeepsPreviousValuesAndPopupOpen(t *testing.T) {
+	endpoint := newFakeEndpoint()
+	endpoint.configureErr = errors.New("port busy")
+	m := newModel(endpoint, Config{PortName: "/dev/test0", Baud: 115200, Frame: "8,N,1"})
+	m.openConfiguration(configurationBaud)
+	m.configuration.input = []rune("921600")
+	_, apply := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m.Update(apply())
+
+	if m.baud != 115200 || m.configuration.mode != configurationBaud || !strings.Contains(m.status, "port busy") {
+		t.Fatalf("baud = %d, mode = %v, status = %q", m.baud, m.configuration.mode, m.status)
 	}
 }
 

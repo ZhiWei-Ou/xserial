@@ -195,6 +195,50 @@ func TestSessionReconnectsAfterSuccessfulInitialConnection(t *testing.T) {
 	}
 }
 
+func TestSessionAppliesRuntimeConnectionConfiguration(t *testing.T) {
+	first := newBlockingPort()
+	second := newBlockingPort()
+	want := ConnectionConfig{PortName: "/dev/test1", BaudRate: 921600, DataBits: 8, Parity: "none", StopBits: "1"}
+	var got ConnectionConfig
+	frontend := frontendFunc(func(ctx context.Context, endpoint Endpoint) error {
+		configurable, ok := endpoint.(interface {
+			Configure(context.Context, ConnectionConfig) error
+		})
+		if !ok {
+			return errors.New("endpoint is not configurable")
+		}
+		if err := configurable.Configure(ctx, want); err != nil {
+			return err
+		}
+		if err := endpoint.Send(ctx, []byte("configured")); err != nil {
+			return err
+		}
+		endpoint.Quit()
+		return nil
+	})
+
+	err := New(Config{
+		Port: first,
+		Reconnect: func() (SerialPort, error) {
+			return newBlockingPort(), nil
+		},
+		OpenConnection: func(cfg ConnectionConfig) (SerialPort, error) {
+			got = cfg
+			return second, nil
+		},
+		Frontend: frontend,
+	}).Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("configuration = %#v, want %#v", got, want)
+	}
+	if output := second.Written(); output != "configured" {
+		t.Fatalf("replacement output = %q", output)
+	}
+}
+
 func TestSessionQuitCancelsReconnectWait(t *testing.T) {
 	var attempts atomic.Int32
 	frontend := frontendFunc(func(ctx context.Context, endpoint Endpoint) error {

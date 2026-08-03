@@ -62,16 +62,21 @@ type writeRequest struct {
 	data []byte
 	done chan error
 }
+type reconfigureRequest struct {
+	open func() (Port, error)
+	done chan error
+}
 type connectionFailure struct {
 	generation uint64
 	err        error
 }
 
 type Endpoint struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	events chan Event
-	writes chan writeRequest
+	ctx         context.Context
+	cancel      context.CancelFunc
+	events      chan Event
+	writes      chan writeRequest
+	reconfigure chan reconfigureRequest
 
 	portMu     sync.RWMutex
 	port       Port
@@ -101,6 +106,28 @@ func (e *Endpoint) Send(ctx context.Context, data []byte) error {
 
 func (e *Endpoint) Quit() { e.cancel() }
 
+func (e *Endpoint) Reconfigure(ctx context.Context, open func() (Port, error)) error {
+	if open == nil {
+		return errors.New("serial port opener is nil")
+	}
+	req := reconfigureRequest{open: open, done: make(chan error, 1)}
+	select {
+	case e.reconfigure <- req:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-e.ctx.Done():
+		return context.Canceled
+	}
+	select {
+	case err := <-req.done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-e.ctx.Done():
+		return context.Canceled
+	}
+}
+
 func (e *Endpoint) connection() (Port, uint64) {
 	e.portMu.RLock()
 	defer e.portMu.RUnlock()
@@ -127,7 +154,10 @@ func (s *Session) Run(parent context.Context, ready chan<- *Endpoint) error {
 		return errors.New("serial port is nil")
 	}
 	ctx, cancel := context.WithCancel(parent)
-	e := &Endpoint{ctx: ctx, cancel: cancel, events: make(chan Event, 32), writes: make(chan writeRequest)}
+	e := &Endpoint{
+		ctx: ctx, cancel: cancel, events: make(chan Event, 32),
+		writes: make(chan writeRequest), reconfigure: make(chan reconfigureRequest),
+	}
 	e.setConnection(s.cfg.Port, 1)
 	select {
 	case ready <- e:
@@ -199,6 +229,7 @@ func (s *Session) runWriter(ctx context.Context, e *Endpoint, failures chan<- co
 
 func (s *Session) runConnections(ctx context.Context, e *Endpoint, failures chan connectionFailure) error {
 	port, generation := e.connection()
+	open := s.cfg.Reconnect
 	readerDone := s.startReader(ctx, e, port, generation, failures)
 	for {
 		select {
@@ -210,6 +241,36 @@ func (s *Session) runConnections(ctx context.Context, e *Endpoint, failures chan
 				return fmt.Errorf("close serial port: %w", closeErr)
 			}
 			return context.Canceled
+		case req := <-e.reconfigure:
+			e.setConnection(nil, generation)
+			_ = port.Close()
+			<-readerDone
+
+			newPort, err := req.open()
+			if err != nil {
+				if open == nil {
+					req.done <- err
+					return fmt.Errorf("apply serial configuration: %w", err)
+				}
+				restoredPort, restoreErr := open()
+				if restoreErr != nil {
+					req.done <- errors.Join(err, restoreErr)
+					return fmt.Errorf("apply serial configuration: %w", errors.Join(err, restoreErr))
+				}
+				port = restoredPort
+				generation++
+				e.setConnection(port, generation)
+				readerDone = s.startReader(ctx, e, port, generation, failures)
+				req.done <- err
+				continue
+			}
+
+			port = newPort
+			open = req.open
+			generation++
+			e.setConnection(port, generation)
+			readerDone = s.startReader(ctx, e, port, generation, failures)
+			req.done <- nil
 		case failure := <-failures:
 			if failure.generation != generation {
 				continue
@@ -218,15 +279,19 @@ func (s *Session) runConnections(ctx context.Context, e *Endpoint, failures chan
 			_ = port.Close()
 			<-readerDone
 			e.emit(Disconnected{Err: failure.err})
-			newPort, attempt, err := s.reconnect(ctx, e, failure.err)
+			newPort, newOpen, attempt, configured, err := s.reconnect(ctx, e, open, failure.err)
 			if err != nil {
 				return err
 			}
 			port = newPort
+			open = newOpen
 			generation++
 			e.setConnection(port, generation)
 			e.emit(Reconnected{Attempt: attempt})
 			readerDone = s.startReader(ctx, e, port, generation, failures)
+			if configured != nil {
+				configured <- nil
+			}
 		}
 	}
 }
@@ -258,35 +323,44 @@ func (s *Session) startReader(ctx context.Context, e *Endpoint, port Port, gener
 	return done
 }
 
-func (s *Session) reconnect(ctx context.Context, e *Endpoint, cause error) (Port, int, error) {
+func (s *Session) reconnect(ctx context.Context, e *Endpoint, open func() (Port, error), cause error) (Port, func() (Port, error), int, chan error, error) {
 	limit := s.cfg.ReconnectAttempts
 	if limit < 0 {
 		limit = 0
 	}
-	if s.cfg.Reconnect == nil || limit == 0 {
-		return nil, 0, cause
+	if open == nil || limit == 0 {
+		return nil, open, 0, nil, cause
 	}
 	interval := s.cfg.ReconnectInterval
 	if interval <= 0 {
 		interval = DefaultReconnectInterval
 	}
 	lastErr := cause
-	for attempt := 1; attempt <= limit; attempt++ {
+	for attempt := 1; attempt <= limit; {
 		e.emit(Reconnecting{Attempt: attempt, Limit: limit, Err: lastErr})
 		timer := time.NewTimer(interval)
 		select {
 		case <-timer.C:
+			port, err := open()
+			if err == nil {
+				return port, open, attempt, nil, nil
+			}
+			lastErr = err
+			attempt++
+		case req := <-e.reconfigure:
+			timer.Stop()
+			port, err := req.open()
+			if err == nil {
+				return port, req.open, attempt, req.done, nil
+			}
+			req.done <- err
+			lastErr = err
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, attempt - 1, context.Canceled
+			return nil, open, attempt - 1, nil, context.Canceled
 		}
-		port, err := s.cfg.Reconnect()
-		if err == nil {
-			return port, attempt, nil
-		}
-		lastErr = err
 	}
-	return nil, limit, fmt.Errorf("%w: %w", ErrReconnectExhausted, lastErr)
+	return nil, open, limit, nil, fmt.Errorf("%w: %w", ErrReconnectExhausted, lastErr)
 }
 
 func normalizeError(err error) error {

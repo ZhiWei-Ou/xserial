@@ -92,3 +92,108 @@ func TestSessionStopsAfterReconnectLimit(t *testing.T) {
 		t.Fatalf("attempts=%d events=%d", attempts, reconnecting)
 	}
 }
+
+func TestSessionReconfiguresActivePort(t *testing.T) {
+	first := newFakePort()
+	second := newFakePort()
+	ready := make(chan *Endpoint, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- New(Config{Port: first, Reconnect: func() (Port, error) { return newFakePort(), nil }}).Run(ctx, ready)
+	}()
+	e := <-ready
+
+	if err := e.Reconfigure(ctx, func() (Port, error) { return second, nil }); err != nil {
+		t.Fatalf("Reconfigure() error = %v", err)
+	}
+	select {
+	case <-first.closed:
+	default:
+		t.Fatal("old serial port remains open")
+	}
+	if err := e.Send(ctx, []byte("new port")); err != nil {
+		t.Fatal(err)
+	}
+	second.mu.Lock()
+	writes := string(second.writes)
+	second.mu.Unlock()
+	if writes != "new port" {
+		t.Fatalf("replacement writes = %q", writes)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionRestoresPreviousConfigurationAfterReconfigureFailure(t *testing.T) {
+	first := newFakePort()
+	restored := newFakePort()
+	ready := make(chan *Endpoint, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- New(Config{Port: first, Reconnect: func() (Port, error) { return restored, nil }}).Run(ctx, ready)
+	}()
+	e := <-ready
+	want := errors.New("unsupported baud")
+
+	if err := e.Reconfigure(ctx, func() (Port, error) { return nil, want }); !errors.Is(err, want) {
+		t.Fatalf("Reconfigure() error = %v, want %v", err, want)
+	}
+	if err := e.Send(ctx, []byte("restored")); err != nil {
+		t.Fatal(err)
+	}
+	restored.mu.Lock()
+	writes := string(restored.writes)
+	restored.mu.Unlock()
+	if writes != "restored" {
+		t.Fatalf("restored port writes = %q", writes)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionReconfiguresWhileWaitingToReconnect(t *testing.T) {
+	first := newFakePort()
+	second := newFakePort()
+	ready := make(chan *Endpoint, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- New(Config{
+			Port: first, ReconnectAttempts: 2, ReconnectInterval: time.Hour,
+			Reconnect: func() (Port, error) { return nil, errors.New("old port missing") },
+		}).Run(ctx, ready)
+	}()
+	e := <-ready
+	_ = first.Close()
+	for {
+		if _, ok := (<-e.Events()).(Reconnecting); ok {
+			break
+		}
+	}
+
+	if err := e.Reconfigure(ctx, func() (Port, error) { return second, nil }); err != nil {
+		t.Fatalf("Reconfigure() error = %v", err)
+	}
+	if err := e.Send(ctx, []byte("new connection")); err != nil {
+		t.Fatal(err)
+	}
+	second.mu.Lock()
+	writes := string(second.writes)
+	second.mu.Unlock()
+	if writes != "new connection" {
+		t.Fatalf("replacement writes = %q", writes)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}

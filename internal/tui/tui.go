@@ -26,6 +26,15 @@ type Config struct {
 	PortName   string
 	Baud       int
 	Frame      string
+	DataBits   int
+	Parity     string
+	StopBits   string
+	ListPorts  func() ([]PortOption, error)
+}
+
+type PortOption struct {
+	Name   string
+	Detail string
 }
 
 type Frontend struct{ cfg Config }
@@ -61,12 +70,22 @@ const (
 type endpointEventMsg struct{ event middleware.Event }
 type endpointClosedMsg struct{}
 type terminalScrollMsg int
+type terminalFocusMsg struct{}
+type configurationOpenMsg struct {
+	mode  configurationMode
+	index int
+}
+type configurationClickMsg struct {
+	mode  configurationMode
+	index int
+}
 type sendResultMsg struct {
 	data []byte
 	err  error
 }
 
 type command struct {
+	key     string
 	label   string
 	enabled func(*model) bool
 	run     func(*model) tea.Cmd
@@ -78,6 +97,10 @@ var commands = []command{
 		return nil
 	}},
 	{label: "Clear terminal", run: func(m *model) tea.Cmd { m.clearTranscript(); return nil }},
+	{key: "c", label: "Focus configuration", enabled: func(m *model) bool { return !m.transferring && showSidebar(max(20, m.width)) }, run: func(m *model) tea.Cmd {
+		m.focus, m.configurationFocusIndex = focusConfiguration, 0
+		return nil
+	}},
 	{label: "Cancel transfer", enabled: func(m *model) bool { return m.transferring }, run: func(m *model) tea.Cmd {
 		m.endpoint.CancelTransfer()
 		m.status = "Canceling transfer…"
@@ -87,43 +110,51 @@ var commands = []command{
 }
 
 type model struct {
-	endpoint     middleware.Endpoint
-	portName     string
-	baud         int
-	frame        string
-	width        int
-	height       int
-	lines        []string
-	input        []rune
-	pathMode     transferMode
-	transferMode transferMode
-	transferring bool
-	connected    bool
-	palette      bool
-	paletteIndex int
-	status       string
-	scroll       int
-	rxBytes      int64
-	txBytes      int64
-	err          error
-	sendQueue    [][]byte
-	sending      bool
-	terminalCol  int
-	terminalRow  int
-	terminalCols int
-	terminalRows int
-	screenTop    int
-	savedCol     int
-	savedRow     int
-	terminalSGR  string
-	terminalANSI []byte
-	lineStyles   [][]string
+	endpoint                middleware.Endpoint
+	listPorts               func() ([]PortOption, error)
+	portName                string
+	baud                    int
+	dataBits                int
+	parity                  string
+	stopBits                string
+	width                   int
+	height                  int
+	lines                   []string
+	input                   []rune
+	pathMode                transferMode
+	transferMode            transferMode
+	transferring            bool
+	connected               bool
+	palette                 bool
+	paletteIndex            int
+	status                  string
+	scroll                  int
+	rxBytes                 int64
+	txBytes                 int64
+	err                     error
+	sendQueue               [][]byte
+	sending                 bool
+	terminalCol             int
+	terminalRow             int
+	terminalCols            int
+	terminalRows            int
+	screenTop               int
+	savedCol                int
+	savedRow                int
+	terminalSGR             string
+	terminalANSI            []byte
+	lineStyles              [][]string
+	configuration           configurationState
+	focus                   focusTarget
+	configurationFocusIndex int
 }
 
 func newModel(endpoint middleware.Endpoint, cfg Config) *model {
+	dataBits, parity, stopBits := connectionFrame(cfg)
 	return &model{
-		endpoint: endpoint, portName: cfg.PortName,
-		baud: cfg.Baud, frame: cfg.Frame, connected: true, status: "Ready",
+		endpoint: endpoint, listPorts: cfg.ListPorts, portName: cfg.PortName,
+		baud: cfg.Baud, dataBits: dataBits, parity: parity, stopBits: stopBits,
+		connected: true, status: "Ready",
 		lines: []string{""}, lineStyles: [][]string{nil}, terminalCols: 80, terminalRows: 1,
 	}
 }
@@ -152,17 +183,39 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitEvent(m.endpoint.Events())
 	case sendResultMsg:
 		m.sending = false
-		if errors.Is(msg.err, middleware.ErrDisconnected) {
-			m.status = "Serial port disconnected; waiting to reconnect"
-		} else if msg.err != nil {
+		if msg.err != nil && !errors.Is(msg.err, middleware.ErrDisconnected) {
 			m.status = fmt.Sprintf("Send failed: %v", msg.err)
 		} else {
-			m.txBytes += int64(len(msg.data))
+			if msg.err == nil {
+				m.txBytes += int64(len(msg.data))
+			}
 		}
 		return m, m.sendNext()
 	case terminalScrollMsg:
 		m.scroll += int(msg)
 		m.clampScroll()
+	case terminalFocusMsg:
+		m.focus = focusTerminal
+	case configurationOpenMsg:
+		returnToConfiguration := m.focus == focusConfiguration
+		command := m.openConfiguration(msg.mode)
+		if msg.mode == configurationFrame {
+			m.configuration.index = msg.index
+		}
+		if m.configuration.mode != configurationNone {
+			m.configuration.returnToConfiguration = returnToConfiguration
+		}
+		return m, command
+	case configurationClickMsg:
+		return m, m.handleConfigurationClick(msg)
+	case portsLoadedMsg:
+		return m, m.handlePortsLoaded(msg)
+	case refreshPortsMsg:
+		if m.configuration.mode == configurationPort {
+			return m, m.loadPorts()
+		}
+	case configurationAppliedMsg:
+		m.handleConfigurationApplied(msg)
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -174,13 +227,10 @@ func (m *model) handleEvent(event middleware.Event) {
 	case middleware.Disconnected:
 		m.connected = false
 		m.sendQueue = nil
-		m.status = fmt.Sprintf("Serial port disconnected: %v — retrying…", event.Err)
 	case middleware.Reconnecting:
 		m.connected = false
-		m.status = fmt.Sprintf("Reconnecting — attempt %d/%d", event.Attempt, event.Limit)
 	case middleware.Reconnected:
 		m.connected = true
-		m.status = "Serial port reconnected"
 	case middleware.Received:
 		atBottom := m.scroll == 0
 		before := len(m.visualLines(m.transcriptWidth()))
@@ -210,6 +260,12 @@ func (m *model) handleEvent(event middleware.Event) {
 
 func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.Keystroke()
+	if m.configuration.mode != configurationNone {
+		return m.handleConfigurationKey(msg)
+	}
+	if m.focus == focusConfiguration {
+		return m.handleConfigurationFocusKey(key)
+	}
 	if key == "ctrl+p" {
 		if m.palette {
 			m.palette = false
@@ -249,7 +305,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if !m.connected {
-		m.status = "Serial port is disconnected"
 		return m, nil
 	}
 	return m, m.queueSend(terminalKeyBytes(msg.Key()))
@@ -276,23 +331,48 @@ func (m *model) handlePathInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handlePalette(key string) (tea.Model, tea.Cmd) {
+	for index, cmd := range commands {
+		if cmd.key == key {
+			m.paletteIndex = index
+			return m.runPaletteCommand(cmd)
+		}
+	}
+	key = navigationKey(key)
 	switch key {
-	case "esc":
+	case "esc", "q":
 		m.palette = false
 	case "up":
 		m.paletteIndex = (m.paletteIndex - 1 + len(commands)) % len(commands)
 	case "down":
 		m.paletteIndex = (m.paletteIndex + 1) % len(commands)
 	case "enter":
-		cmd := commands[m.paletteIndex]
-		if cmd.enabled != nil && !cmd.enabled(m) {
-			m.status = cmd.label + " is unavailable"
-			return m, nil
-		}
-		m.palette = false
-		return m, cmd.run(m)
+		return m.runPaletteCommand(commands[m.paletteIndex])
 	}
 	return m, nil
+}
+
+func (m *model) runPaletteCommand(cmd command) (tea.Model, tea.Cmd) {
+	if cmd.enabled != nil && !cmd.enabled(m) {
+		m.status = cmd.label + " is unavailable"
+		return m, nil
+	}
+	m.palette = false
+	return m, cmd.run(m)
+}
+
+func navigationKey(key string) string {
+	switch key {
+	case "h":
+		return "left"
+	case "j":
+		return "down"
+	case "k":
+		return "up"
+	case "l":
+		return "right"
+	default:
+		return key
+	}
 }
 
 func (m *model) clearTranscript() {
@@ -918,6 +998,8 @@ func (m *model) View() tea.View {
 		popup = m.renderPalettePopup(min(52, max(28, width-8)))
 	} else if m.pathMode != transferNone {
 		popup = m.renderPathPopup(min(64, max(32, width-8)))
+	} else if m.configuration.mode != configurationNone {
+		popup = m.renderConfigurationPopup(min(64, max(36, width-8)))
 	}
 	if popup != "" {
 		popupWidth, popupHeight := lipgloss.Width(popup), lipgloss.Height(popup)
@@ -935,14 +1017,25 @@ func (m *model) View() tea.View {
 	view.BackgroundColor = color.Black
 	view.MouseMode = tea.MouseModeCellMotion
 	view.WindowTitle = "xserial — " + m.portName
-	if !m.palette && m.pathMode == transferNone {
+	if !m.palette && m.pathMode == transferNone && m.configuration.mode == configurationNone {
 		workbenchX := 0
 		if showSidebar(width) {
 			workbenchX = sidebarWidthFor(width) + 1
 		}
-		view.OnMouse = terminalMouseHandler(workbenchX, workbenchWidth, bodyHeight)
+		view.OnMouse = mainMouseHandler(showSidebar(width), sidebarWidthFor(width), workbenchX, workbenchWidth, bodyHeight)
+	} else if m.configuration.mode != configurationNone && popup != "" {
+		popupWidth, popupHeight := lipgloss.Width(popup), lipgloss.Height(popup)
+		portStart, _ := m.portWindow()
+		view.OnMouse = configurationMouseHandler(
+			m.configuration.mode,
+			max(0, (width-popupWidth)/2),
+			max(0, (height-popupHeight)/2),
+			popupWidth,
+			portStart,
+			len(m.configuration.ports),
+		)
 	}
-	if !m.palette && m.pathMode == transferNone {
+	if !m.palette && m.pathMode == transferNone && m.configuration.mode == configurationNone && m.focus == focusTerminal {
 		if cursorX, cursorY, ok := m.terminalCursorPosition(workbenchWidth, bodyHeight); ok {
 			workbenchX := 0
 			if showSidebar(width) {
@@ -955,11 +1048,33 @@ func (m *model) View() tea.View {
 	return view
 }
 
-func terminalMouseHandler(workbenchX, workbenchWidth, bodyHeight int) func(tea.MouseMsg) tea.Cmd {
+func mainMouseHandler(sidebarVisible bool, sidebarWidth, workbenchX, workbenchWidth, bodyHeight int) func(tea.MouseMsg) tea.Cmd {
 	return func(msg tea.MouseMsg) tea.Cmd {
 		mouse := msg.Mouse()
+		if _, ok := msg.(tea.MouseClickMsg); ok && mouse.Button == tea.MouseLeft && sidebarVisible && mouse.X < sidebarWidth {
+			var mode configurationMode
+			index := 0
+			switch mouse.Y {
+			case 3, 4:
+				mode = configurationPort
+			case 5, 6:
+				mode = configurationBaud
+			case 7, 8:
+				mode = configurationFrame
+			case 9, 10:
+				mode, index = configurationFrame, 1
+			case 11, 12:
+				mode, index = configurationFrame, 2
+			}
+			if mode != configurationNone {
+				return func() tea.Msg { return configurationOpenMsg{mode: mode, index: index} }
+			}
+		}
 		if mouse.X < workbenchX || mouse.X >= workbenchX+workbenchWidth || mouse.Y < 3 || mouse.Y >= bodyHeight-1 {
 			return nil
+		}
+		if _, ok := msg.(tea.MouseClickMsg); ok && mouse.Button == tea.MouseLeft {
+			return func() tea.Msg { return terminalFocusMsg{} }
 		}
 		var delta terminalScrollMsg
 		switch mouse.Button {
@@ -979,17 +1094,25 @@ func showSidebar(width int) bool { return width >= 60 }
 func sidebarWidthFor(width int) int { return min(30, max(24, width/4)) }
 
 func (m *model) renderSidebar(width, height int) string {
-	content := strings.Join([]string{
+	rows := []string{
 		sectionTitleStyle.Render("CONFIGURATION"),
 		divider(width - 4),
-		fieldLabelStyle.Render("PORT"),
-		fieldValueStyle.Render(m.portName),
-		fieldLabelStyle.Render("BAUD RATE"),
-		fieldValueStyle.Render(strconv.Itoa(m.baud)),
-		fieldLabelStyle.Render("FRAME"),
-		fieldValueStyle.Render(m.frame),
-	}, "\n")
+	}
+	rows = append(rows, m.renderSidebarField(0, "PORT", m.portName)...)
+	rows = append(rows, m.renderSidebarField(1, "BAUD RATE", strconv.Itoa(m.baud))...)
+	rows = append(rows, m.renderSidebarField(2, "DATA BITS", strconv.Itoa(m.dataBits))...)
+	rows = append(rows, m.renderSidebarField(3, "PARITY", strings.ToUpper(m.parity))...)
+	rows = append(rows, m.renderSidebarField(4, "STOP BITS", m.stopBits)...)
+	content := strings.Join(rows, "\n")
 	return sidebarStyle.Width(width).Height(height).Render(content)
+}
+
+func (m *model) renderSidebarField(index int, label, value string) []string {
+	labelStyle := sidebarLabelStyle
+	if m.focus == focusConfiguration && m.configurationFocusIndex == index && m.configuration.mode == configurationNone {
+		labelStyle = sidebarFocusedLabelStyle
+	}
+	return []string{labelStyle.Render(label), sidebarValueStyle.Render(value)}
 }
 
 func (m *model) renderFooter(width int) string {
@@ -1001,6 +1124,11 @@ func (m *model) renderFooter(width int) string {
 		metaStyle.Render("  RX ") + fieldValueStyle.Render(formatBytes(m.rxBytes)) +
 		metaStyle.Render("  TX ") + fieldValueStyle.Render(formatBytes(m.txBytes))
 	status := metaStyle.Render(m.status)
+	if m.focus == focusConfiguration && m.configuration.mode == configurationNone && !m.palette {
+		hints := metaStyle.Render("j/k select  •  Enter edit  •  Esc/q terminal")
+		content := "  " + connection + "  •  " + session + "  •  " + hints
+		return footerStyle.Width(width).Render(fitLine(content, width))
+	}
 	hints := metaStyle.Render("Ctrl+P commands")
 	content := "  " + connection + "  •  " + session + "  •  " + status + "  •  " + hints
 	return footerStyle.Width(width).Render(fitLine(content, width))
@@ -1148,6 +1276,9 @@ func (m *model) renderPalettePopup(width int) string {
 			prefix = "› "
 		}
 		label := command.label
+		if command.key != "" {
+			label = "[" + command.key + "] " + label
+		}
 		if command.enabled != nil && !command.enabled(m) {
 			label += " (inactive)"
 		}
@@ -1159,7 +1290,7 @@ func (m *model) renderPalettePopup(width int) string {
 		}
 		rows = append(rows, row)
 	}
-	rows = append(rows, "", footerStyle.Render("↑/↓ select  •  Enter run  •  Esc close"))
+	rows = append(rows, "", footerStyle.Render("↑/↓ or j/k select  •  Enter run  •  Esc/q close"))
 	for i := range rows {
 		rows[i] = fitLine(rows[i], width-4)
 	}
@@ -1206,31 +1337,34 @@ func formatBytes(n int64) string {
 }
 
 var (
-	background            = lipgloss.Color("#000000")
-	accent                = lipgloss.Color("#D97757")
-	accentBright          = lipgloss.Color("#E99578")
-	green                 = lipgloss.Color("#34D399")
-	muted                 = lipgloss.Color("#A8A29E")
-	panelBorder           = accent
-	red                   = lipgloss.Color("#FB7185")
-	surface               = background
-	metaStyle             = lipgloss.NewStyle().Foreground(muted)
-	valueStyle            = lipgloss.NewStyle().Foreground(accentBright).Bold(true)
-	sectionTitleStyle     = lipgloss.NewStyle().Foreground(accentBright).Bold(true)
-	fieldLabelStyle       = lipgloss.NewStyle().Foreground(muted).Bold(true)
-	fieldValueStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#F8FAFC"))
-	connectedStyle        = lipgloss.NewStyle().Foreground(green).Bold(true)
-	reconnectingStyle     = lipgloss.NewStyle().Foreground(red).Bold(true)
-	dividerStyle          = lipgloss.NewStyle().Foreground(panelBorder)
-	sidebarStyle          = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(panelBorder).Background(surface).Padding(0, 1)
-	workbenchStyle        = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(panelBorder).Background(surface).Padding(0, 1)
-	gapStyle              = lipgloss.NewStyle().Background(background)
-	inputBarStyle         = lipgloss.NewStyle().Background(surface)
-	paletteStyle          = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accent).Background(surface).Padding(1, 2)
-	paletteSelectionStyle = lipgloss.NewStyle().Foreground(accentBright).Bold(true)
-	promptStyle           = lipgloss.NewStyle().Foreground(accentBright).Bold(true)
-	footerStyle           = lipgloss.NewStyle().Foreground(muted).Background(background)
-	errorStyle            = lipgloss.NewStyle().Foreground(red).Background(background).Bold(true)
+	background               = lipgloss.Color("#000000")
+	accent                   = lipgloss.Color("#D97757")
+	accentBright             = lipgloss.Color("#E99578")
+	green                    = lipgloss.Color("#34D399")
+	muted                    = lipgloss.Color("#A8A29E")
+	panelBorder              = accent
+	red                      = lipgloss.Color("#FB7185")
+	surface                  = background
+	metaStyle                = lipgloss.NewStyle().Foreground(muted)
+	valueStyle               = lipgloss.NewStyle().Foreground(accentBright).Bold(true)
+	sectionTitleStyle        = lipgloss.NewStyle().Foreground(accentBright).Bold(true)
+	sidebarLabelStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
+	sidebarFocusedLabelStyle = lipgloss.NewStyle().Foreground(accentBright).Bold(true).Underline(true)
+	sidebarValueStyle        = lipgloss.NewStyle().Foreground(green)
+	fieldLabelStyle          = lipgloss.NewStyle().Foreground(muted).Bold(true)
+	fieldValueStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("#F8FAFC"))
+	connectedStyle           = lipgloss.NewStyle().Foreground(green).Bold(true)
+	reconnectingStyle        = lipgloss.NewStyle().Foreground(red).Bold(true)
+	dividerStyle             = lipgloss.NewStyle().Foreground(panelBorder)
+	sidebarStyle             = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(panelBorder).Background(surface).Padding(0, 1)
+	workbenchStyle           = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(panelBorder).Background(surface).Padding(0, 1)
+	gapStyle                 = lipgloss.NewStyle().Background(background)
+	inputBarStyle            = lipgloss.NewStyle().Background(surface)
+	paletteStyle             = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accent).Background(surface).Padding(1, 2)
+	paletteSelectionStyle    = lipgloss.NewStyle().Foreground(accentBright).Bold(true)
+	promptStyle              = lipgloss.NewStyle().Foreground(accentBright).Bold(true)
+	footerStyle              = lipgloss.NewStyle().Foreground(muted).Background(background)
+	errorStyle               = lipgloss.NewStyle().Foreground(red).Background(background).Bold(true)
 )
 
 var _ middleware.Frontend = (*Frontend)(nil)

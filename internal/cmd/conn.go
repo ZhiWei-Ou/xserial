@@ -117,15 +117,22 @@ func parseConnOptions(args []string, logPath, timeFormat string, useTUI bool) (c
 
 func runConn(ctx context.Context, opts connOptions) error {
 	logger := logging.New(os.Stderr)
-	serialConfig := serialport.Config{
+	connectionConfig := session.ConnectionConfig{
+		PortName: opts.port,
 		BaudRate: opts.baud,
 		DataBits: opts.dataBits,
 		Parity:   opts.parity,
 		StopBits: opts.stopBits,
 	}
-	openPort := func() (session.SerialPort, error) {
-		return serialport.Open(opts.port, serialConfig)
+	openConnection := func(cfg session.ConnectionConfig) (session.SerialPort, error) {
+		return serialport.Open(cfg.PortName, serialport.Config{
+			BaudRate: cfg.BaudRate,
+			DataBits: cfg.DataBits,
+			Parity:   cfg.Parity,
+			StopBits: cfg.StopBits,
+		})
 	}
+	openPort := func() (session.SerialPort, error) { return openConnection(connectionConfig) }
 	port, err := openPort()
 	if err != nil {
 		return fmt.Errorf("open serial port %q: %w", opts.port, err)
@@ -158,7 +165,21 @@ func runConn(ctx context.Context, opts connOptions) error {
 			TimeFormat: opts.timeFormat,
 			PortName:   opts.port,
 			Baud:       opts.baud,
-			Frame:      fmt.Sprintf("%d,%s,%s", opts.dataBits, strings.ToUpper(opts.parity[:1]), opts.stopBits),
+			DataBits:   opts.dataBits,
+			Parity:     opts.parity,
+			StopBits:   opts.stopBits,
+			ListPorts: func() ([]serialtui.PortOption, error) {
+				ports, err := serialport.List()
+				if err != nil {
+					return nil, err
+				}
+				options := make([]serialtui.PortOption, 0, len(ports))
+				for _, port := range ports {
+					detail := strings.TrimSpace(strings.TrimPrefix(serialport.FormatInfo(port), port.Name))
+					options = append(options, serialtui.PortOption{Name: port.Name, Detail: detail})
+				}
+				return options, nil
+			},
 		})
 	} else {
 		logger.Info("session.ready", "help", "Ctrl-P h", "quit", "Ctrl-P q")
@@ -181,6 +202,7 @@ func runConn(ctx context.Context, opts connOptions) error {
 			}
 			return opts.reconnectAttempts
 		}(),
+		OpenConnection:    openConnection,
 		Frontend:          frontend,
 		ReceiveLog:        receiveLog,
 		ReceiveTimeFormat: opts.timeFormat,

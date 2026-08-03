@@ -15,9 +15,18 @@ import (
 )
 
 var (
-	ErrDisconnected   = errors.New("serial port is disconnected")
-	ErrTransferActive = errors.New("transfer is active")
+	ErrDisconnected    = errors.New("serial port is disconnected")
+	ErrTransferActive  = errors.New("transfer is active")
+	ErrNotConfigurable = errors.New("serial session is not configurable")
 )
+
+type ConnectionConfig struct {
+	PortName string
+	BaudRate int
+	DataBits int
+	Parity   string
+	StopBits string
+}
 
 type SerialPort interface {
 	io.ReadWriteCloser
@@ -131,6 +140,7 @@ type Config struct {
 	Reconnect         func() (SerialPort, error)
 	ReconnectInterval time.Duration
 	ReconnectAttempts int
+	OpenConnection    func(ConnectionConfig) (SerialPort, error)
 	Frontend          Frontend
 	ReceiveLog        io.Writer
 	ReceiveTimeFormat string
@@ -145,14 +155,15 @@ type Session struct {
 func New(cfg Config) *Session { return &Session{cfg: cfg} }
 
 type endpoint struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	events    chan Event
-	ready     chan struct{}
-	readyOnce sync.Once
-	logger    *logging.Logger
-	backend   *backend.Endpoint
-	pipeline  *Pipeline
+	ctx            context.Context
+	cancel         context.CancelFunc
+	events         chan Event
+	ready          chan struct{}
+	readyOnce      sync.Once
+	logger         *logging.Logger
+	backend        *backend.Endpoint
+	pipeline       *Pipeline
+	openConnection func(ConnectionConfig) (SerialPort, error)
 
 	mu                    sync.Mutex
 	stopping              bool
@@ -210,6 +221,24 @@ func (e *endpoint) Send(ctx context.Context, data []byte) error {
 		return ErrTransferActive
 	}
 	return e.write(ctx, data)
+}
+
+func (e *endpoint) Configure(ctx context.Context, cfg ConnectionConfig) error {
+	e.markReady()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.stopping {
+		return context.Canceled
+	}
+	if e.transferActive {
+		return ErrTransferActive
+	}
+	if e.openConnection == nil {
+		return ErrNotConfigurable
+	}
+	return e.backend.Reconfigure(ctx, func() (backend.Port, error) {
+		return e.openConnection(cfg)
+	})
 }
 
 func (e *endpoint) write(ctx context.Context, data []byte) error {
@@ -509,6 +538,7 @@ func (s *Session) Run(parent context.Context) error {
 	e := &endpoint{
 		ctx: ctx, cancel: cancel, events: make(chan Event, 32), logger: s.cfg.Logger,
 		ready: make(chan struct{}), backend: backendEndpoint, pipeline: pipeline,
+		openConnection: s.cfg.OpenConnection,
 	}
 	dispatcherDone := make(chan error, 1)
 	go func() { dispatcherDone <- s.runBackendEvents(ctx, e) }()

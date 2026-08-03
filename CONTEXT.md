@@ -14,6 +14,11 @@
   Its full-screen UI uses a pure black background and Claude-style orange
   borders, including overlays. The sidebar contains serial configuration;
   connection state and session statistics belong in the bottom status bar.
+  TUI serial configuration fields are clickable; confirmed changes replace
+  the active connection, and the port picker refreshes while it is open.
+  Selection popups support Vim-style h/j/k/l navigation alongside arrow keys.
+  Ctrl-P c focuses the configuration sidebar for keyboard navigation without
+  consuming normal terminal input keys.
 - RawUI logs use `time [LEVEL] message`; only the level text is colored, and
   connection parameters are emitted as separate log entries.
 - Application logs use `internal/logging`; leveled calls go through its
