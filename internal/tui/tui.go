@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image/color"
 	"io"
 	"strconv"
 	"strings"
-	"time"
+	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -58,11 +60,10 @@ const (
 
 type endpointEventMsg struct{ event middleware.Event }
 type endpointClosedMsg struct{}
+type terminalScrollMsg int
 type sendResultMsg struct {
-	data  []byte
-	at    time.Time
-	err   error
-	input []rune
+	data []byte
+	err  error
 }
 
 type command struct {
@@ -76,7 +77,7 @@ var commands = []command{
 		m.pathMode, m.input, m.status = transferRawUpload, nil, "Enter a local file path for raw upload"
 		return nil
 	}},
-	{label: "Clear traffic", run: func(m *model) tea.Cmd { m.clearTranscript(); return nil }},
+	{label: "Clear terminal", run: func(m *model) tea.Cmd { m.clearTranscript(); return nil }},
 	{label: "Cancel transfer", enabled: func(m *model) bool { return m.transferring }, run: func(m *model) tea.Cmd {
 		m.endpoint.CancelTransfer()
 		m.status = "Canceling transfer…"
@@ -87,7 +88,6 @@ var commands = []command{
 
 type model struct {
 	endpoint     middleware.Endpoint
-	timeFormat   string
 	portName     string
 	baud         int
 	frame        string
@@ -106,14 +106,25 @@ type model struct {
 	rxBytes      int64
 	txBytes      int64
 	err          error
-	history      []string
-	historyIndex int
+	sendQueue    [][]byte
+	sending      bool
+	terminalCol  int
+	terminalRow  int
+	terminalCols int
+	terminalRows int
+	screenTop    int
+	savedCol     int
+	savedRow     int
+	terminalSGR  string
+	terminalANSI []byte
+	lineStyles   [][]string
 }
 
 func newModel(endpoint middleware.Endpoint, cfg Config) *model {
 	return &model{
-		endpoint: endpoint, timeFormat: cfg.TimeFormat, portName: cfg.PortName,
-		baud: cfg.Baud, frame: cfg.Frame, connected: true, status: "Ready — enter Hex bytes",
+		endpoint: endpoint, portName: cfg.PortName,
+		baud: cfg.Baud, frame: cfg.Frame, connected: true, status: "Ready",
+		lines: []string{""}, lineStyles: [][]string{nil}, terminalCols: 80, terminalRows: 1,
 	}
 }
 
@@ -140,29 +151,18 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleEvent(msg.event)
 		return m, waitEvent(m.endpoint.Events())
 	case sendResultMsg:
+		m.sending = false
 		if errors.Is(msg.err, middleware.ErrDisconnected) {
-			if len(m.input) == 0 {
-				m.input = append([]rune(nil), msg.input...)
-			}
 			m.status = "Serial port disconnected; waiting to reconnect"
 		} else if msg.err != nil {
-			if len(m.input) == 0 {
-				m.input = append([]rune(nil), msg.input...)
-			}
 			m.status = fmt.Sprintf("Send failed: %v", msg.err)
 		} else {
 			m.txBytes += int64(len(msg.data))
-			m.appendTraffic("TX", msg.data, msg.at)
-			canonical := formatHexInput(msg.data)
-			if len(m.history) == 0 || m.history[len(m.history)-1] != canonical {
-				m.history = append(m.history, canonical)
-			}
-			if len(m.history) > 100 {
-				m.history = append([]string(nil), m.history[len(m.history)-100:]...)
-			}
-			m.historyIndex = len(m.history)
-			m.status = fmt.Sprintf("Sent %d bytes", len(msg.data))
 		}
+		return m, m.sendNext()
+	case terminalScrollMsg:
+		m.scroll += int(msg)
+		m.clampScroll()
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -173,6 +173,7 @@ func (m *model) handleEvent(event middleware.Event) {
 	switch event := event.(type) {
 	case middleware.Disconnected:
 		m.connected = false
+		m.sendQueue = nil
 		m.status = fmt.Sprintf("Serial port disconnected: %v — retrying…", event.Err)
 	case middleware.Reconnecting:
 		m.connected = false
@@ -183,7 +184,7 @@ func (m *model) handleEvent(event middleware.Event) {
 	case middleware.Received:
 		atBottom := m.scroll == 0
 		before := len(m.visualLines(m.transcriptWidth()))
-		m.appendTraffic("RX", event.Data, event.At)
+		m.appendTerminalData(event.Data)
 		m.rxBytes += int64(len(event.Data))
 		m.trimTranscript()
 		if !atBottom {
@@ -209,11 +210,14 @@ func (m *model) handleEvent(event middleware.Event) {
 
 func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.Keystroke()
-	if key == "ctrl+c" {
-		m.endpoint.Quit()
-		return m, tea.Quit
-	}
 	if key == "ctrl+p" {
+		if m.palette {
+			m.palette = false
+			if m.connected && !m.transferring && m.pathMode == transferNone {
+				return m, m.queueSend([]byte{0x10})
+			}
+			return m, nil
+		}
 		m.palette = !m.palette
 		m.paletteIndex = 0
 		return m, nil
@@ -221,69 +225,59 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.palette {
 		return m.handlePalette(key)
 	}
-	if key == "esc" && m.pathMode != transferNone {
-		m.pathMode = transferNone
-		m.input = nil
-		m.status = "File selection canceled"
-		return m, nil
-	}
 	if key == "esc" && m.transferring {
 		m.endpoint.CancelTransfer()
 		m.status = "Canceling transfer…"
 		return m, nil
 	}
+	if m.pathMode != transferNone {
+		return m.handlePathInput(msg)
+	}
+	if m.transferring {
+		return m, nil
+	}
 	switch key {
-	case "up":
-		if len(m.history) > 0 {
-			if m.historyIndex > 0 {
-				m.historyIndex--
-			}
-			m.input = []rune(m.history[m.historyIndex])
-		}
-		return m, nil
-	case "down":
-		if m.historyIndex < len(m.history) {
-			m.historyIndex++
-			if m.historyIndex == len(m.history) {
-				m.input = nil
-			} else {
-				m.input = []rune(m.history[m.historyIndex])
-			}
-		}
-		return m, nil
-	case "pgup":
+	case "shift+pgup":
 		m.scroll += max(1, m.transcriptHeight()-1)
 		m.clampScroll()
 		return m, nil
-	case "pgdown":
+	case "shift+pgdown":
 		m.scroll -= max(1, m.transcriptHeight()-1)
 		if m.scroll < 0 {
 			m.scroll = 0
 		}
 		return m, nil
+	}
+	if !m.connected {
+		m.status = "Serial port is disconnected"
+		return m, nil
+	}
+	return m, m.queueSend(terminalKeyBytes(msg.Key()))
+}
+
+func (m *model) handlePathInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.Keystroke() {
+	case "esc":
+		m.pathMode = transferNone
+		m.input = nil
+		m.status = "File selection canceled"
 	case "backspace":
-		if len(m.input) > 0 && !m.transferring {
+		if len(m.input) > 0 {
 			m.input = m.input[:len(m.input)-1]
 		}
-		return m, nil
 	case "enter":
-		if m.transferring {
-			return m, nil
+		return m.startFileTransfer()
+	default:
+		if msg.Key().Text != "" {
+			m.input = append(m.input, []rune(msg.Key().Text)...)
 		}
-		if m.pathMode != transferNone {
-			return m.startFileTransfer()
-		}
-		return m.sendInput()
-	}
-	if msg.Key().Text != "" && !m.transferring {
-		m.input = append(m.input, []rune(msg.Key().Text)...)
 	}
 	return m, nil
 }
 
 func (m *model) handlePalette(key string) (tea.Model, tea.Cmd) {
 	switch key {
-	case "esc", "ctrl+p":
+	case "esc":
 		m.palette = false
 	case "up":
 		m.paletteIndex = (m.paletteIndex - 1 + len(commands)) % len(commands)
@@ -302,67 +296,102 @@ func (m *model) handlePalette(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) clearTranscript() {
-	m.lines = nil
+	m.resetTerminalScreen()
+	m.terminalANSI = nil
 	m.scroll = 0
-	m.status = "Transcript cleared"
+	m.status = "Terminal cleared"
 }
 
-func (m *model) sendInput() (tea.Model, tea.Cmd) {
-	if !m.connected {
-		m.status = "Serial port is disconnected"
-		return m, nil
-	}
-	originalInput := append([]rune(nil), m.input...)
-	data, err := parseHexInput(string(m.input))
-	if err != nil {
-		m.status = fmt.Sprintf("Invalid hex: %v", err)
-		return m, nil
-	}
+func (m *model) queueSend(data []byte) tea.Cmd {
 	if len(data) == 0 {
-		m.status = "Nothing to send"
-		return m, nil
+		return nil
 	}
-	m.input = nil
-	return m, func() tea.Msg {
+	m.sendQueue = append(m.sendQueue, append([]byte(nil), data...))
+	return m.sendNext()
+}
+
+func (m *model) sendNext() tea.Cmd {
+	if m.sending || len(m.sendQueue) == 0 {
+		return nil
+	}
+	data := m.sendQueue[0]
+	m.sendQueue = m.sendQueue[1:]
+	m.sending = true
+	return func() tea.Msg {
 		err := m.endpoint.Send(context.Background(), data)
-		return sendResultMsg{data: append([]byte(nil), data...), at: time.Now(), err: err, input: originalInput}
+		return sendResultMsg{data: data, err: err}
 	}
 }
 
-func parseHexInput(input string) ([]byte, error) {
-	fields := strings.Fields(strings.ReplaceAll(input, ",", " "))
-	if len(fields) == 0 {
-		return nil, nil
+func terminalKeyBytes(key tea.Key) []byte {
+	if key.Mod&tea.ModCtrl != 0 {
+		code := unicode.ToLower(key.Code)
+		if code >= 'a' && code <= 'z' {
+			return withAlt(key.Mod, []byte{byte(code-'a') + 1})
+		}
+		switch code {
+		case ' ', '@':
+			return withAlt(key.Mod, []byte{0})
+		case '[':
+			return withAlt(key.Mod, []byte{0x1b})
+		case '\\':
+			return withAlt(key.Mod, []byte{0x1c})
+		case ']':
+			return withAlt(key.Mod, []byte{0x1d})
+		case '^':
+			return withAlt(key.Mod, []byte{0x1e})
+		case '_':
+			return withAlt(key.Mod, []byte{0x1f})
+		}
 	}
+
+	if key.Text != "" {
+		return withAlt(key.Mod, []byte(key.Text))
+	}
+
 	var data []byte
-	for _, field := range fields {
-		if strings.HasPrefix(strings.ToLower(field), "0x") {
-			field = field[2:]
-			if len(field) != 2 {
-				return nil, fmt.Errorf("0x value %q must contain exactly two digits", field)
-			}
+	switch key.Code {
+	case tea.KeyEnter, tea.KeyKpEnter:
+		data = []byte{'\r'}
+	case tea.KeyTab:
+		if key.Mod&tea.ModShift != 0 {
+			data = []byte("\x1b[Z")
+		} else {
+			data = []byte{'\t'}
 		}
-		if len(field)%2 != 0 {
-			return nil, fmt.Errorf("%q contains an odd number of digits", field)
-		}
-		for i := 0; i < len(field); i += 2 {
-			pair := field[i : i+2]
-			value, err := strconv.ParseUint(pair, 16, 8)
-			if err != nil {
-				return nil, fmt.Errorf("%q is not Hex", pair)
-			}
-			data = append(data, byte(value))
-		}
+	case tea.KeyBackspace:
+		data = []byte{0x7f}
+	case tea.KeyEscape:
+		data = []byte{0x1b}
+	case tea.KeyUp:
+		data = []byte("\x1b[A")
+	case tea.KeyDown:
+		data = []byte("\x1b[B")
+	case tea.KeyRight:
+		data = []byte("\x1b[C")
+	case tea.KeyLeft:
+		data = []byte("\x1b[D")
+	case tea.KeyHome:
+		data = []byte("\x1b[H")
+	case tea.KeyEnd:
+		data = []byte("\x1b[F")
+	case tea.KeyInsert:
+		data = []byte("\x1b[2~")
+	case tea.KeyDelete:
+		data = []byte("\x1b[3~")
+	case tea.KeyPgUp:
+		data = []byte("\x1b[5~")
+	case tea.KeyPgDown:
+		data = []byte("\x1b[6~")
 	}
-	return data, nil
+	return withAlt(key.Mod, data)
 }
 
-func formatHexInput(data []byte) string {
-	parts := make([]string, len(data))
-	for i, value := range data {
-		parts[i] = fmt.Sprintf("%02X", value)
+func withAlt(mod tea.KeyMod, data []byte) []byte {
+	if len(data) == 0 || mod&tea.ModAlt == 0 {
+		return data
 	}
-	return strings.Join(parts, " ")
+	return append([]byte{0x1b}, data...)
 }
 
 func (m *model) startFileTransfer() (tea.Model, tea.Cmd) {
@@ -394,46 +423,471 @@ func (m transferMode) label() string {
 	}
 }
 
-func (m *model) appendTraffic(direction string, data []byte, at time.Time) {
-	for offset := 0; offset < len(data); offset += 16 {
-		end := min(len(data), offset+16)
-		m.lines = append(m.lines, m.linePrefix(at)+formatTrafficLine(direction, data[offset:end]))
+func (m *model) appendTerminalData(data []byte) {
+	m.terminalANSI = append(m.terminalANSI, data...)
+	m.ensureTerminalScreen()
+	for len(m.terminalANSI) > 0 {
+		if m.terminalANSI[0] == 0x1b {
+			consumed, complete := m.consumeANSI(m.terminalANSI)
+			if !complete {
+				break
+			}
+			m.terminalANSI = m.terminalANSI[consumed:]
+			continue
+		}
+
+		var r rune
+		if m.terminalANSI[0] < utf8.RuneSelf {
+			r = rune(m.terminalANSI[0])
+			m.terminalANSI = m.terminalANSI[1:]
+		} else {
+			if !utf8.FullRune(m.terminalANSI) {
+				break
+			}
+			var size int
+			r, size = utf8.DecodeRune(m.terminalANSI)
+			m.terminalANSI = m.terminalANSI[size:]
+		}
+		switch r {
+		case '\r':
+			m.terminalCol = 0
+		case '\n':
+			m.terminalLineFeed()
+		case '\b':
+			if m.terminalCol > 0 {
+				m.terminalCol--
+			}
+		case '\t':
+			spaces := 8 - m.terminalCol%8
+			for range spaces {
+				m.putTerminalRune(' ')
+			}
+		default:
+			if unicode.IsPrint(r) {
+				m.putTerminalRune(r)
+			}
+		}
 	}
 	m.trimTranscript()
 }
 
-func formatTrafficLine(direction string, data []byte) string {
-	var hexPart strings.Builder
-	var asciiPart strings.Builder
-	for i := 0; i < 16; i++ {
-		if i < len(data) {
-			fmt.Fprintf(&hexPart, "%02X ", data[i])
-			if data[i] >= 0x20 && data[i] <= 0x7e {
-				asciiPart.WriteByte(data[i])
-			} else {
-				asciiPart.WriteByte('.')
-			}
-		} else {
-			hexPart.WriteString("   ")
-			asciiPart.WriteByte(' ')
-		}
-		if i == 7 {
-			hexPart.WriteByte(' ')
-		}
+func (m *model) consumeANSI(data []byte) (consumed int, complete bool) {
+	if len(data) < 2 {
+		return 0, false
 	}
-	return fmt.Sprintf("%-2s %4d B  %s |%s|", direction, len(data), hexPart.String(), asciiPart.String())
+	switch data[1] {
+	case '[':
+		for i := 2; i < len(data); i++ {
+			if data[i] < 0x40 || data[i] > 0x7e {
+				continue
+			}
+			params := data[2:i]
+			if data[i] == 'm' {
+				sequence := string(data[:i+1])
+				if resetsSGR(params) {
+					m.terminalSGR = sequence
+				} else {
+					m.terminalSGR += sequence
+				}
+			} else {
+				m.applyCSI(data[i], parseCSIParams(params))
+			}
+			return i + 1, true
+		}
+		return 0, false
+	case ']':
+		for i := 2; i < len(data); i++ {
+			if data[i] == '\a' {
+				return i + 1, true
+			}
+			if data[i] == 0x1b {
+				if i+1 >= len(data) {
+					return 0, false
+				}
+				if data[i+1] == '\\' {
+					return i + 2, true
+				}
+			}
+		}
+		return 0, false
+	case '7':
+		m.savedRow, m.savedCol = m.terminalRow, m.terminalCol
+		return 2, true
+	case '8':
+		m.terminalRow, m.terminalCol = m.savedRow, m.savedCol
+		m.clampTerminalCursor()
+		return 2, true
+	case 'D':
+		m.terminalLineFeed()
+		return 2, true
+	case 'E':
+		m.terminalCol = 0
+		m.terminalLineFeed()
+		return 2, true
+	case 'M':
+		m.terminalReverseIndex()
+		return 2, true
+	case 'c':
+		m.resetTerminalScreen()
+		return 2, true
+	case '(', ')', '*', '+':
+		if len(data) < 3 {
+			return 0, false
+		}
+		return 3, true
+	default:
+		return 2, true
+	}
 }
 
-func (m *model) linePrefix(at time.Time) string {
-	if m.timeFormat == "" {
-		return ""
+func parseCSIParams(raw []byte) []int {
+	text := strings.TrimLeft(string(raw), "?<=>!")
+	if text == "" {
+		return nil
 	}
-	return "[" + at.Format(m.timeFormat) + "] "
+	fields := strings.Split(text, ";")
+	params := make([]int, len(fields))
+	for i, field := range fields {
+		field = strings.SplitN(field, ":", 2)[0]
+		if field == "" {
+			continue
+		}
+		params[i], _ = strconv.Atoi(field)
+	}
+	return params
+}
+
+func csiParam(params []int, index, defaultValue int) int {
+	if index >= len(params) || params[index] == 0 {
+		return defaultValue
+	}
+	return params[index]
+}
+
+func (m *model) applyCSI(final byte, params []int) {
+	switch final {
+	case 'A':
+		m.terminalRow -= csiParam(params, 0, 1)
+	case 'B':
+		m.terminalRow += csiParam(params, 0, 1)
+	case 'C':
+		m.terminalCol += csiParam(params, 0, 1)
+	case 'D':
+		m.terminalCol -= csiParam(params, 0, 1)
+	case 'E':
+		m.terminalRow += csiParam(params, 0, 1)
+		m.terminalCol = 0
+	case 'F':
+		m.terminalRow -= csiParam(params, 0, 1)
+		m.terminalCol = 0
+	case 'G':
+		m.terminalCol = csiParam(params, 0, 1) - 1
+	case 'H', 'f':
+		m.terminalRow = csiParam(params, 0, 1) - 1
+		m.terminalCol = csiParam(params, 1, 1) - 1
+	case 'd':
+		m.terminalRow = csiParam(params, 0, 1) - 1
+	case 'J':
+		m.eraseTerminalDisplay(csiParam(params, 0, 0))
+	case 'K':
+		m.eraseTerminalLine(csiParam(params, 0, 0))
+	case 'P':
+		m.deleteTerminalChars(csiParam(params, 0, 1))
+	case '@':
+		m.insertTerminalChars(csiParam(params, 0, 1))
+	case 'X':
+		m.eraseTerminalChars(csiParam(params, 0, 1))
+	case 'L':
+		m.insertTerminalLines(csiParam(params, 0, 1))
+	case 'M':
+		m.deleteTerminalLines(csiParam(params, 0, 1))
+	case 'S':
+		m.scrollTerminalUp(csiParam(params, 0, 1))
+	case 'T':
+		m.scrollTerminalDown(csiParam(params, 0, 1))
+	case 's':
+		m.savedRow, m.savedCol = m.terminalRow, m.terminalCol
+	case 'u':
+		m.terminalRow, m.terminalCol = m.savedRow, m.savedCol
+	}
+	m.clampTerminalCursor()
+}
+
+func resetsSGR(params []byte) bool {
+	if len(params) == 0 {
+		return true
+	}
+	for _, param := range strings.Split(string(params), ";") {
+		if param == "" || param == "0" {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *model) putTerminalRune(r rune) {
+	if m.terminalCol >= m.terminalCols {
+		m.terminalCol = 0
+		m.terminalLineFeed()
+	}
+	index := m.activeTerminalLine()
+	line := []rune(m.lines[index])
+	styles := m.lineStyles[index]
+	for len(styles) < len(line) {
+		styles = append(styles, "")
+	}
+	for len(line) < m.terminalCol {
+		line = append(line, ' ')
+		styles = append(styles, m.terminalSGR)
+	}
+	if m.terminalCol < len(line) {
+		line[m.terminalCol] = r
+		styles[m.terminalCol] = m.terminalSGR
+	} else {
+		line = append(line, r)
+		styles = append(styles, m.terminalSGR)
+	}
+	m.lines[index] = string(line)
+	m.lineStyles[index] = styles
+	m.terminalCol++
+}
+
+func (m *model) activeTerminalLine() int {
+	m.ensureTerminalScreen()
+	return m.screenTop + m.terminalRow
+}
+
+func (m *model) ensureTerminalScreen() {
+	if m.terminalCols < 1 {
+		m.terminalCols = 1
+	}
+	if m.terminalRows < 1 {
+		m.terminalRows = 1
+	}
+	needed := m.screenTop + m.terminalRows
+	for len(m.lines) < needed {
+		m.lines = append(m.lines, "")
+	}
+	for len(m.lineStyles) < len(m.lines) {
+		m.lineStyles = append(m.lineStyles, nil)
+	}
+}
+
+func (m *model) resizeTerminalScreen(cols, rows int) {
+	cols, rows = max(1, cols), max(1, rows)
+	absoluteCursor := m.screenTop + m.terminalRow
+	m.terminalCols, m.terminalRows = cols, rows
+	m.screenTop = max(0, len(m.lines)-rows)
+	m.terminalRow = absoluteCursor - m.screenTop
+	m.clampTerminalCursor()
+	m.ensureTerminalScreen()
+}
+
+func (m *model) clampTerminalCursor() {
+	m.terminalRow = min(max(0, m.terminalRow), max(0, m.terminalRows-1))
+	m.terminalCol = min(max(0, m.terminalCol), max(0, m.terminalCols-1))
+}
+
+func (m *model) terminalLineFeed() {
+	if m.terminalRow < m.terminalRows-1 {
+		m.terminalRow++
+		m.ensureTerminalScreen()
+		return
+	}
+	m.screenTop++
+	m.ensureTerminalScreen()
+}
+
+func (m *model) terminalReverseIndex() {
+	if m.terminalRow > 0 {
+		m.terminalRow--
+		return
+	}
+	m.ensureTerminalScreen()
+	index := m.screenTop
+	m.lines = append(m.lines[:index], append([]string{""}, m.lines[index:]...)...)
+	m.lineStyles = append(m.lineStyles[:index], append([][]string{nil}, m.lineStyles[index:]...)...)
+	bottom := m.screenTop + m.terminalRows
+	m.lines = append(m.lines[:bottom], m.lines[bottom+1:]...)
+	m.lineStyles = append(m.lineStyles[:bottom], m.lineStyles[bottom+1:]...)
+}
+
+func (m *model) resetTerminalScreen() {
+	m.lines = make([]string, max(1, m.terminalRows))
+	m.lineStyles = make([][]string, len(m.lines))
+	m.screenTop, m.terminalRow, m.terminalCol = 0, 0, 0
+	m.savedRow, m.savedCol = 0, 0
+	m.terminalSGR = ""
+}
+
+func (m *model) eraseTerminalDisplay(mode int) {
+	m.ensureTerminalScreen()
+	switch mode {
+	case 0:
+		m.eraseTerminalLine(0)
+		for row := m.terminalRow + 1; row < m.terminalRows; row++ {
+			m.clearTerminalRow(row)
+		}
+	case 1:
+		for row := 0; row < m.terminalRow; row++ {
+			m.clearTerminalRow(row)
+		}
+		m.eraseTerminalLine(1)
+	case 2:
+		for row := range m.terminalRows {
+			m.clearTerminalRow(row)
+		}
+	case 3:
+		m.lines = append([]string(nil), m.lines[m.screenTop:]...)
+		m.lineStyles = append([][]string(nil), m.lineStyles[m.screenTop:]...)
+		m.screenTop = 0
+	}
+}
+
+func (m *model) eraseTerminalLine(mode int) {
+	index := m.activeTerminalLine()
+	line := []rune(m.lines[index])
+	styles := m.lineStyles[index]
+	for len(styles) < len(line) {
+		styles = append(styles, "")
+	}
+	switch mode {
+	case 0:
+		if m.terminalCol < len(line) {
+			line = line[:m.terminalCol]
+			styles = styles[:min(m.terminalCol, len(styles))]
+		}
+	case 1:
+		end := min(m.terminalCol+1, len(line))
+		for i := 0; i < end; i++ {
+			line[i] = ' '
+			if i < len(styles) {
+				styles[i] = ""
+			}
+		}
+	case 2:
+		line, styles = nil, nil
+	}
+	m.lines[index], m.lineStyles[index] = string(line), styles
+}
+
+func (m *model) deleteTerminalChars(count int) {
+	index := m.activeTerminalLine()
+	line := []rune(m.lines[index])
+	if m.terminalCol >= len(line) {
+		return
+	}
+	end := min(len(line), m.terminalCol+count)
+	line = append(line[:m.terminalCol], line[end:]...)
+	styles := m.lineStyles[index]
+	if m.terminalCol < len(styles) {
+		styleEnd := min(len(styles), end)
+		styles = append(styles[:m.terminalCol], styles[styleEnd:]...)
+	}
+	m.lines[index], m.lineStyles[index] = string(line), styles
+}
+
+func (m *model) insertTerminalChars(count int) {
+	index := m.activeTerminalLine()
+	line := []rune(m.lines[index])
+	styles := m.lineStyles[index]
+	for len(styles) < len(line) {
+		styles = append(styles, "")
+	}
+	for len(line) < m.terminalCol {
+		line = append(line, ' ')
+		styles = append(styles, "")
+	}
+	blanks := make([]rune, count)
+	for i := range blanks {
+		blanks[i] = ' '
+	}
+	line = append(line[:m.terminalCol], append(blanks, line[m.terminalCol:]...)...)
+	styles = append(styles[:m.terminalCol], append(make([]string, count), styles[m.terminalCol:]...)...)
+	if len(line) > m.terminalCols {
+		line = line[:m.terminalCols]
+		styles = styles[:min(len(styles), m.terminalCols)]
+	}
+	m.lines[index], m.lineStyles[index] = string(line), styles
+}
+
+func (m *model) eraseTerminalChars(count int) {
+	index := m.activeTerminalLine()
+	line := []rune(m.lines[index])
+	styles := m.lineStyles[index]
+	for len(styles) < len(line) {
+		styles = append(styles, "")
+	}
+	for len(line) < min(m.terminalCols, m.terminalCol+count) {
+		line = append(line, ' ')
+		styles = append(styles, "")
+	}
+	for i := m.terminalCol; i < min(len(line), m.terminalCol+count); i++ {
+		line[i] = ' '
+		styles[i] = ""
+	}
+	m.lines[index], m.lineStyles[index] = string(line), styles
+}
+
+func (m *model) insertTerminalLines(count int) {
+	m.ensureTerminalScreen()
+	count = min(count, m.terminalRows-m.terminalRow)
+	start := m.screenTop + m.terminalRow
+	bottom := m.screenTop + m.terminalRows
+	for range count {
+		m.lines = append(m.lines[:start], append([]string{""}, m.lines[start:]...)...)
+		m.lineStyles = append(m.lineStyles[:start], append([][]string{nil}, m.lineStyles[start:]...)...)
+		m.lines = append(m.lines[:bottom], m.lines[bottom+1:]...)
+		m.lineStyles = append(m.lineStyles[:bottom], m.lineStyles[bottom+1:]...)
+	}
+}
+
+func (m *model) deleteTerminalLines(count int) {
+	m.ensureTerminalScreen()
+	count = min(count, m.terminalRows-m.terminalRow)
+	start := m.screenTop + m.terminalRow
+	bottom := m.screenTop + m.terminalRows
+	for range count {
+		m.lines = append(m.lines[:start], m.lines[start+1:]...)
+		m.lineStyles = append(m.lineStyles[:start], m.lineStyles[start+1:]...)
+		m.lines = append(m.lines[:bottom-1], append([]string{""}, m.lines[bottom-1:]...)...)
+		m.lineStyles = append(m.lineStyles[:bottom-1], append([][]string{nil}, m.lineStyles[bottom-1:]...)...)
+	}
+}
+
+func (m *model) scrollTerminalUp(count int) {
+	row := m.terminalRow
+	m.terminalRow = m.terminalRows - 1
+	for range min(count, m.terminalRows) {
+		m.terminalLineFeed()
+	}
+	m.terminalRow = row
+}
+
+func (m *model) scrollTerminalDown(count int) {
+	row := m.terminalRow
+	m.terminalRow = 0
+	for range min(count, m.terminalRows) {
+		m.terminalReverseIndex()
+	}
+	m.terminalRow = row
+}
+
+func (m *model) clearTerminalRow(row int) {
+	index := m.screenTop + row
+	m.lines[index], m.lineStyles[index] = "", nil
 }
 
 func (m *model) trimTranscript() {
 	if len(m.lines) > maxTranscriptLines {
-		m.lines = append([]string(nil), m.lines[len(m.lines)-maxTranscriptLines:]...)
+		start := len(m.lines) - maxTranscriptLines
+		m.lines = append([]string(nil), m.lines[start:]...)
+		if start < len(m.lineStyles) {
+			m.lineStyles = append([][]string(nil), m.lineStyles[start:]...)
+		} else {
+			m.lineStyles = nil
+		}
+		m.screenTop = max(0, m.screenTop-start)
 	}
 }
 
@@ -445,42 +899,27 @@ func (m *model) View() tea.View {
 	if height < 12 {
 		height = 12
 	}
-	header := titleStyle.Render("  XSERIAL") + "  " + badgeStyle.Render(m.connectionName()) +
-		metaStyle.Render(fmt.Sprintf("  %s  •  %d baud  •  %s", m.portName, m.baud, m.frame))
-	stats := metaStyle.Render("  RX ") + valueStyle.Render(formatBytes(m.rxBytes)) +
-		metaStyle.Render("   TX ") + valueStyle.Render(formatBytes(m.txBytes)) +
-		metaStyle.Render("   MODE ") + valueStyle.Render(m.modeName())
-
-	panelContent := m.renderTranscript(m.transcriptWidthFor(width), m.transcriptHeightFor(height))
-	panel := panelStyle.Width(width).Render(panelContent)
-	prompt := m.modeName() + " › "
-	displayInput := string(m.input)
-	if m.pathMode == transferNone {
-		if parsed, err := parseHexInput(displayInput); err == nil {
-			displayInput = formatHexInput(parsed)
-			prompt = fmt.Sprintf("Hex (%d B) › ", len(parsed))
-		} else {
-			prompt = "Hex (!invalid) › "
-		}
+	bodyHeight := height - 1
+	workbenchWidth := width
+	if showSidebar(width) {
+		workbenchWidth -= sidebarWidthFor(width) + 1
 	}
-	if m.pathMode != transferNone {
-		prompt = m.pathMode.label() + " › "
+	m.resizeTerminalScreen(max(1, workbenchWidth-4), max(1, bodyHeight-4))
+	workbench := m.renderWorkbench(workbenchWidth, bodyHeight)
+	body := workbench
+	if showSidebar(width) {
+		sidebar := m.renderSidebar(sidebarWidthFor(width), bodyHeight)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, sidebar, gapStyle.Render(" "), workbench)
 	}
-	input := promptStyle.Render(prompt) + displayInput
-	if !m.transferring {
-		input += valueStyle.Render("▏")
-	}
-	status := footerStyle.Render(m.status)
-	if m.err != nil {
-		status = errorStyle.Render(m.err.Error())
-	}
-	footer := footerStyle.Render("Ctrl+P commands  •  ↑/↓ history  •  PgUp/PgDn scroll  •  Ctrl+C quit")
-	content := strings.Join([]string{
-		fitLine(header, width), fitLine(stats, width), panel,
-		fitLine(input, width), fitLine(status, width), fitLine(footer, width),
-	}, "\n")
+	footer := m.renderFooter(width)
+	content := strings.Join([]string{body, fitLine(footer, width)}, "\n")
+	var popup string
 	if m.palette {
-		popup := m.renderPalettePopup(min(52, max(28, width-8)))
+		popup = m.renderPalettePopup(min(52, max(28, width-8)))
+	} else if m.pathMode != transferNone {
+		popup = m.renderPathPopup(min(64, max(32, width-8)))
+	}
+	if popup != "" {
 		popupWidth, popupHeight := lipgloss.Width(popup), lipgloss.Height(popup)
 		canvas := lipgloss.NewCanvas(width, height)
 		baseLayer := lipgloss.NewLayer(content)
@@ -493,28 +932,127 @@ func (m *model) View() tea.View {
 	}
 	view := tea.NewView(content)
 	view.AltScreen = true
+	view.BackgroundColor = color.Black
+	view.MouseMode = tea.MouseModeCellMotion
 	view.WindowTitle = "xserial — " + m.portName
+	if !m.palette && m.pathMode == transferNone {
+		workbenchX := 0
+		if showSidebar(width) {
+			workbenchX = sidebarWidthFor(width) + 1
+		}
+		view.OnMouse = terminalMouseHandler(workbenchX, workbenchWidth, bodyHeight)
+	}
+	if !m.palette && m.pathMode == transferNone {
+		if cursorX, cursorY, ok := m.terminalCursorPosition(workbenchWidth, bodyHeight); ok {
+			workbenchX := 0
+			if showSidebar(width) {
+				workbenchX = sidebarWidthFor(width) + 1
+			}
+			view.Cursor = tea.NewCursor(workbenchX+2+cursorX, 3+cursorY)
+			view.Cursor.Blink = false
+		}
+	}
 	return view
 }
 
+func terminalMouseHandler(workbenchX, workbenchWidth, bodyHeight int) func(tea.MouseMsg) tea.Cmd {
+	return func(msg tea.MouseMsg) tea.Cmd {
+		mouse := msg.Mouse()
+		if mouse.X < workbenchX || mouse.X >= workbenchX+workbenchWidth || mouse.Y < 3 || mouse.Y >= bodyHeight-1 {
+			return nil
+		}
+		var delta terminalScrollMsg
+		switch mouse.Button {
+		case tea.MouseWheelUp:
+			delta = 3
+		case tea.MouseWheelDown:
+			delta = -3
+		default:
+			return nil
+		}
+		return func() tea.Msg { return delta }
+	}
+}
+
+func showSidebar(width int) bool { return width >= 60 }
+
+func sidebarWidthFor(width int) int { return min(30, max(24, width/4)) }
+
+func (m *model) renderSidebar(width, height int) string {
+	content := strings.Join([]string{
+		sectionTitleStyle.Render("CONFIGURATION"),
+		divider(width - 4),
+		fieldLabelStyle.Render("PORT"),
+		fieldValueStyle.Render(m.portName),
+		fieldLabelStyle.Render("BAUD RATE"),
+		fieldValueStyle.Render(strconv.Itoa(m.baud)),
+		fieldLabelStyle.Render("FRAME"),
+		fieldValueStyle.Render(m.frame),
+	}, "\n")
+	return sidebarStyle.Width(width).Height(height).Render(content)
+}
+
+func (m *model) renderFooter(width int) string {
+	if m.err != nil {
+		return errorStyle.Width(width).Render(fitLine("  "+m.err.Error(), width))
+	}
+	connection := connectionStyle(m.connected).Render(m.connectionName())
+	session := fieldValueStyle.Render(m.modeName()) +
+		metaStyle.Render("  RX ") + fieldValueStyle.Render(formatBytes(m.rxBytes)) +
+		metaStyle.Render("  TX ") + fieldValueStyle.Render(formatBytes(m.txBytes))
+	status := metaStyle.Render(m.status)
+	hints := metaStyle.Render("Ctrl+P commands")
+	content := "  " + connection + "  •  " + session + "  •  " + status + "  •  " + hints
+	return footerStyle.Width(width).Render(fitLine(content, width))
+}
+
+func (m *model) renderWorkbench(width, height int) string {
+	innerWidth := max(1, width-4)
+	transcriptHeight := max(1, height-4)
+	title := sectionTitleStyle.Render("TERMINAL")
+	transcript := m.renderTranscript(innerWidth, transcriptHeight)
+	content := strings.Join([]string{
+		fitLine(title, innerWidth),
+		divider(innerWidth),
+		transcript,
+	}, "\n")
+	return workbenchStyle.Width(width).Height(height).Render(content)
+}
+
+func connectionStyle(connected bool) lipgloss.Style {
+	if connected {
+		return connectedStyle
+	}
+	return reconnectingStyle
+}
+
+func divider(width int) string {
+	return dividerStyle.Render(strings.Repeat("─", max(1, width)))
+}
+
 func (m *model) modeName() string {
-	return "Hex"
+	return "Interactive"
 }
 
 func (m *model) connectionName() string {
 	if m.connected {
 		return "CONNECTED"
 	}
-	return "RECONNECTING"
+	return "DISCONNECTED"
 }
 
-func (m *model) transcriptWidth() int               { return m.transcriptWidthFor(max(20, m.width)) }
-func (m *model) transcriptHeight() int              { return m.transcriptHeightFor(max(12, m.height)) }
-func (m *model) transcriptWidthFor(width int) int   { return max(1, width-6) }
-func (m *model) transcriptHeightFor(height int) int { return max(1, height-7) }
+func (m *model) transcriptWidth() int {
+	width := max(20, m.width)
+	if showSidebar(width) {
+		width -= sidebarWidthFor(width) + 1
+	}
+	return max(1, width-4)
+}
+
+func (m *model) transcriptHeight() int { return max(1, max(12, m.height)-5) }
 
 func (m *model) renderTranscript(width, height int) string {
-	visual := m.visualLines(width)
+	visual, _, _ := m.terminalVisual(width)
 	end := len(visual) - m.scroll
 	if end < 0 {
 		end = 0
@@ -528,17 +1066,82 @@ func (m *model) renderTranscript(width, height int) string {
 }
 
 func (m *model) visualLines(width int) []string {
-	logical := append([]string(nil), m.lines...)
-	var visual []string
-	for _, line := range logical {
-		wrapped := ansi.Hardwrap(line, width, false)
-		visual = append(visual, strings.Split(wrapped, "\n")...)
-	}
+	visual, _, _ := m.terminalVisual(width)
 	return visual
 }
 
+func (m *model) terminalVisual(width int) (visual []string, cursorX, cursorLine int) {
+	cursorLine = -1
+	activeLine := m.screenTop + m.terminalRow
+	for i := range m.lines {
+		line := m.renderTerminalLine(i)
+		wrapped := ansi.Hardwrap(line, width, false)
+		wrappedLines := strings.Split(wrapped, "\n")
+		if i == activeLine {
+			plain := []rune(m.lines[i])
+			column := min(m.terminalCol, len(plain))
+			prefixLines := strings.Split(ansi.Hardwrap(string(plain[:column]), width, false), "\n")
+			cursorY := len(prefixLines) - 1
+			cursorX = ansi.StringWidth(prefixLines[cursorY])
+			if cursorX >= width {
+				cursorX = 0
+				cursorY++
+			}
+			for len(wrappedLines) <= cursorY {
+				wrappedLines = append(wrappedLines, "")
+			}
+			cursorLine = len(visual) + cursorY
+		}
+		visual = append(visual, wrappedLines...)
+	}
+	return visual, cursorX, cursorLine
+}
+
+func (m *model) terminalCursorPosition(workbenchWidth, bodyHeight int) (x, y int, ok bool) {
+	width := max(1, workbenchWidth-4)
+	height := max(1, bodyHeight-4)
+	visual, cursorX, cursorLine := m.terminalVisual(width)
+	if cursorLine < 0 {
+		return 0, 0, false
+	}
+	end := max(0, len(visual)-m.scroll)
+	start := max(0, end-height)
+	if cursorLine < start || cursorLine >= end {
+		return 0, 0, false
+	}
+	return cursorX, cursorLine - start, true
+}
+
+func (m *model) renderTerminalLine(index int) string {
+	if index >= len(m.lineStyles) || len(m.lineStyles[index]) == 0 {
+		return m.lines[index]
+	}
+	runes := []rune(m.lines[index])
+	styles := m.lineStyles[index]
+	var rendered strings.Builder
+	active := ""
+	for i, r := range runes {
+		style := ""
+		if i < len(styles) {
+			style = styles[i]
+		}
+		if style != active {
+			if active != "" {
+				rendered.WriteString("\x1b[0m")
+			}
+			rendered.WriteString(style)
+			active = style
+		}
+		rendered.WriteRune(r)
+	}
+	if active != "" {
+		rendered.WriteString("\x1b[0m")
+	}
+	return rendered.String()
+}
+
 func (m *model) renderPalettePopup(width int) string {
-	rows := []string{titleStyle.Render("Command Palette")}
+	rows := []string{sectionTitleStyle.Render("Command Palette")}
 	for i, command := range commands {
 		prefix := "  "
 		if i == m.paletteIndex {
@@ -548,11 +1151,29 @@ func (m *model) renderPalettePopup(width int) string {
 		if command.enabled != nil && !command.enabled(m) {
 			label += " (inactive)"
 		}
-		rows = append(rows, prefix+label)
+		row := prefix + label
+		if i == m.paletteIndex {
+			row = paletteSelectionStyle.Render(row)
+		} else if command.enabled != nil && !command.enabled(m) {
+			row = metaStyle.Render(row)
+		}
+		rows = append(rows, row)
 	}
 	rows = append(rows, "", footerStyle.Render("↑/↓ select  •  Enter run  •  Esc close"))
 	for i := range rows {
 		rows[i] = fitLine(rows[i], width-4)
+	}
+	return paletteStyle.Width(width).Render(strings.Join(rows, "\n"))
+}
+
+func (m *model) renderPathPopup(width int) string {
+	input := promptStyle.Render("Local path › ") + string(m.input) + valueStyle.Render("▏")
+	rows := []string{
+		sectionTitleStyle.Render("Send raw file"),
+		"",
+		fitLine(inputBarStyle.Render(input), width-4),
+		"",
+		footerStyle.Render("Enter send  •  Esc cancel"),
 	}
 	return paletteStyle.Width(width).Render(strings.Join(rows, "\n"))
 }
@@ -585,21 +1206,31 @@ func formatBytes(n int64) string {
 }
 
 var (
-	accent       = lipgloss.Color("#8B5CF6")
-	accentBright = lipgloss.Color("#C4B5FD")
-	green        = lipgloss.Color("#34D399")
-	muted        = lipgloss.Color("#94A3B8")
-	panelBorder  = lipgloss.Color("#475569")
-	red          = lipgloss.Color("#FB7185")
-	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF"))
-	badgeStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#0F172A")).Background(green).Padding(0, 1)
-	metaStyle    = lipgloss.NewStyle().Foreground(muted)
-	valueStyle   = lipgloss.NewStyle().Foreground(accentBright).Bold(true)
-	panelStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(panelBorder).Padding(0, 1)
-	paletteStyle = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(accent).Background(lipgloss.Color("#111827")).Padding(1, 2)
-	promptStyle  = lipgloss.NewStyle().Foreground(accentBright).Bold(true)
-	footerStyle  = lipgloss.NewStyle().Foreground(muted)
-	errorStyle   = lipgloss.NewStyle().Foreground(red).Bold(true)
+	background            = lipgloss.Color("#000000")
+	accent                = lipgloss.Color("#D97757")
+	accentBright          = lipgloss.Color("#E99578")
+	green                 = lipgloss.Color("#34D399")
+	muted                 = lipgloss.Color("#A8A29E")
+	panelBorder           = accent
+	red                   = lipgloss.Color("#FB7185")
+	surface               = background
+	metaStyle             = lipgloss.NewStyle().Foreground(muted)
+	valueStyle            = lipgloss.NewStyle().Foreground(accentBright).Bold(true)
+	sectionTitleStyle     = lipgloss.NewStyle().Foreground(accentBright).Bold(true)
+	fieldLabelStyle       = lipgloss.NewStyle().Foreground(muted).Bold(true)
+	fieldValueStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#F8FAFC"))
+	connectedStyle        = lipgloss.NewStyle().Foreground(green).Bold(true)
+	reconnectingStyle     = lipgloss.NewStyle().Foreground(red).Bold(true)
+	dividerStyle          = lipgloss.NewStyle().Foreground(panelBorder)
+	sidebarStyle          = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(panelBorder).Background(surface).Padding(0, 1)
+	workbenchStyle        = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(panelBorder).Background(surface).Padding(0, 1)
+	gapStyle              = lipgloss.NewStyle().Background(background)
+	inputBarStyle         = lipgloss.NewStyle().Background(surface)
+	paletteStyle          = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accent).Background(surface).Padding(1, 2)
+	paletteSelectionStyle = lipgloss.NewStyle().Foreground(accentBright).Bold(true)
+	promptStyle           = lipgloss.NewStyle().Foreground(accentBright).Bold(true)
+	footerStyle           = lipgloss.NewStyle().Foreground(muted).Background(background)
+	errorStyle            = lipgloss.NewStyle().Foreground(red).Background(background).Bold(true)
 )
 
 var _ middleware.Frontend = (*Frontend)(nil)

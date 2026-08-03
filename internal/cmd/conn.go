@@ -43,7 +43,7 @@ const (
 
 func bindConnFlags(cmd *cobra.Command, flags *connFlags) {
 	cmd.Flags().StringVar(&flags.logPath, "log", "", "append received bytes to file")
-	cmd.Flags().StringVar(&flags.timeFormat, "time", "", "Go time format prepended to each received line")
+	cmd.Flags().StringVar(&flags.timeFormat, "time", "", "time format prepended to each received line")
 	cmd.Flags().Lookup("time").NoOptDefVal = defaultReceiveTimeFormat
 	cmd.Flags().BoolVar(&flags.useTUI, "tui", false, "open the modern full-screen interface")
 	cmd.Flags().IntVar(&flags.reconnectAttempts, "reconnect", 5, "number of reconnect attempts after disconnection (0 disables)")
