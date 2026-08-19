@@ -36,6 +36,20 @@ func (p *fakePort) Write(data []byte) (int, error) {
 }
 func (p *fakePort) Close() error { p.once.Do(func() { close(p.closed) }); return nil }
 
+type pollingPort struct {
+	readStarted chan struct{}
+	once        sync.Once
+}
+
+func (p *pollingPort) Read([]byte) (int, error) {
+	p.once.Do(func() { close(p.readStarted) })
+	time.Sleep(10 * time.Millisecond)
+	return 0, nil
+}
+
+func (*pollingPort) Write(data []byte) (int, error) { return len(data), nil }
+func (*pollingPort) Close() error                   { return nil }
+
 func TestSessionTransfersBytes(t *testing.T) {
 	port := newFakePort()
 	ready := make(chan *Endpoint, 1)
@@ -61,6 +75,26 @@ func TestSessionTransfersBytes(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSessionCancellationDoesNotRequireCloseToUnblockRead(t *testing.T) {
+	port := &pollingPort{readStarted: make(chan struct{})}
+	ready := make(chan *Endpoint, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- New(Config{Port: port}).Run(ctx, ready) }()
+	<-ready
+	<-port.readStarted
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session remained blocked after cancellation")
 	}
 }
 

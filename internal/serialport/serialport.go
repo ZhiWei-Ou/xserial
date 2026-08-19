@@ -72,7 +72,15 @@ func Open(name string, cfg Config) (Port, error) {
 	if err != nil {
 		return nil, err
 	}
-	return serial.Open(name, mode)
+	port, err := serial.Open(name, mode)
+	if err != nil {
+		return nil, err
+	}
+	if err := configureReadCancellation(port); err != nil {
+		_ = port.Close()
+		return nil, fmt.Errorf("configure serial read cancellation: %w", err)
+	}
+	return port, nil
 }
 
 func modeFromConfig(cfg Config) (*serial.Mode, error) {
