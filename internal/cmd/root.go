@@ -39,12 +39,13 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 	var showVersion bool
 
 	rootCmd := &cobra.Command{
-		Use:           "xserial [port] [cfg]",
-		Short:         "Cross-platform serial terminal",
-		Example:       directConnExamples,
-		SilenceErrors: true,
-		SilenceUsage:  true,
-		Args:          cobra.MaximumNArgs(2),
+		Use:                   "xserial [port] [flags] [baud,data-bits,parity,stop-bits]",
+		DisableFlagsInUseLine: true,
+		Short:                 "Cross-platform serial terminal",
+		Example:               directConnExamples,
+		SilenceErrors:         true,
+		SilenceUsage:          true,
+		Args:                  cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if showVersion {
 				info, ok := debug.ReadBuildInfo()
@@ -62,6 +63,9 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 		},
 	}
 
+	rootCmd.SetUsageTemplate(strings.Replace(rootCmd.UsageTemplate(),
+		"{{if .HasAvailableSubCommands}}\n  {{.CommandPath}} [command]",
+		"{{if and .HasParent .HasAvailableSubCommands}}\n  {{.CommandPath}} [command]", 1))
 	rootCmd.SetHelpTemplate(fmt.Sprintf(asciiPrefix, version) + "\n" + rootCmd.HelpTemplate())
 	bindConnFlags(rootCmd, &flags)
 	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "show version and build summary")
