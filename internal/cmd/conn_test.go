@@ -79,10 +79,8 @@ func TestConnExposesReceiveLog(t *testing.T) {
 	} else if flag.DefValue != "false" {
 		t.Fatalf("--tui default = %q, want false", flag.DefValue)
 	}
-	if flag := cmd.Flags().Lookup("reconnect"); flag == nil {
-		t.Fatal("--reconnect flag not found")
-	} else if flag.DefValue != "5" {
-		t.Fatalf("--reconnect default = %q, want 5", flag.DefValue)
+	if flag := cmd.Flags().Lookup("reconnect"); flag != nil {
+		t.Fatal("--reconnect flag should not exist")
 	}
 }
 
@@ -131,7 +129,7 @@ func TestParseConnOptionsUsesScreenStyleDefaults(t *testing.T) {
 		t.Fatalf("parseConnOptions() error = %v", err)
 	}
 
-	if opts.port != "/dev/ttyUSB0" || opts.baud != 115200 || opts.dataBits != 8 || opts.parity != "none" || opts.stopBits != "1" || opts.reconnectAttempts != 5 {
+	if opts.port != "/dev/ttyUSB0" || opts.baud != 115200 || opts.dataBits != 8 || opts.parity != "none" || opts.stopBits != "1" {
 		t.Fatalf("parseConnOptions() = %#v, want /dev/ttyUSB0 115200 8N1", opts)
 	}
 }

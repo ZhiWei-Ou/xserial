@@ -98,32 +98,31 @@ func TestSessionCancellationDoesNotRequireCloseToUnblockRead(t *testing.T) {
 	}
 }
 
-func TestSessionStopsAfterReconnectLimit(t *testing.T) {
+func TestSessionKeepsReconnectingUntilCanceled(t *testing.T) {
 	port := newFakePort()
 	ready := make(chan *Endpoint, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	attempts := 0
-	missingErr := errors.New("missing")
 	done := make(chan error, 1)
 	go func() {
-		done <- New(Config{Port: port, ReconnectAttempts: 2, ReconnectInterval: time.Millisecond, Reconnect: func() (Port, error) { attempts++; return nil, missingErr }}).Run(context.Background(), ready)
+		done <- New(Config{Port: port, ReconnectInterval: time.Nanosecond, Reconnect: func() (Port, error) {
+			attempts++
+			return nil, errors.New("device missing")
+		}}).Run(ctx, ready)
 	}()
 	e := <-ready
 	_ = port.Close()
-	var reconnecting int
 	for event := range e.Events() {
-		if _, ok := event.(Reconnecting); ok {
-			reconnecting++
+		if event, ok := event.(Reconnecting); ok && event.Attempt == 11 {
+			cancel()
 		}
 	}
-	err := <-done
-	if !errors.Is(err, ErrReconnectExhausted) {
-		t.Fatalf("error=%v", err)
+	if err := <-done; err != nil {
+		t.Fatalf("Run() error = %v", err)
 	}
-	if !errors.Is(err, missingErr) {
-		t.Fatalf("error=%v does not wrap the last reconnect error", err)
-	}
-	if attempts != 2 || reconnecting != 2 {
-		t.Fatalf("attempts=%d events=%d", attempts, reconnecting)
+	if attempts < 10 {
+		t.Fatalf("attempts = %d, want at least 10", attempts)
 	}
 }
 
@@ -201,7 +200,7 @@ func TestSessionReconfiguresWhileWaitingToReconnect(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- New(Config{
-			Port: first, ReconnectAttempts: 2, ReconnectInterval: time.Hour,
+			Port: first, ReconnectInterval: time.Hour,
 			Reconnect: func() (Port, error) { return nil, errors.New("old port missing") },
 		}).Run(ctx, ready)
 	}()

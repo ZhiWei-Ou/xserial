@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"runtime/debug"
 
@@ -46,14 +45,10 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 			if len(args) == 0 {
 				return cmd.Help()
 			}
-			if flags.reconnectAttempts < 0 {
-				return errors.New("reconnect attempts must be non-negative")
-			}
 			opts, err := parseConnOptions(args, flags.logPath, flags.timeFormat, flags.useTUI)
 			if err != nil {
 				return err
 			}
-			opts.reconnectAttempts = flags.reconnectAttempts
 			opts.hexdump = flags.hexdump
 			return deps.conn(cmd.Context(), opts)
 		},

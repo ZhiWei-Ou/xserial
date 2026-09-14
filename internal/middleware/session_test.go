@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZhiWei-Ou/xserial/internal/logging"
 	"github.com/ZhiWei-Ou/xserial/internal/transfer"
 )
 
@@ -162,7 +163,7 @@ func TestSessionReconnectsAfterSuccessfulInitialConnection(t *testing.T) {
 	second := newBlockingPort()
 	var attempts atomic.Int32
 	open := func() (SerialPort, error) {
-		if attempts.Add(1) == 1 {
+		if attempts.Add(1) <= 10 {
 			return nil, errors.New("device is still missing")
 		}
 		return second, nil
@@ -180,15 +181,20 @@ func TestSessionReconnectsAfterSuccessfulInitialConnection(t *testing.T) {
 		return nil
 	})
 
+	var logs bytes.Buffer
 	err := New(Config{
-		Port: first, Reconnect: open, ReconnectInterval: time.Nanosecond,
+		Logger: logging.New(&logs),
+		Port:   first, Reconnect: open, ReconnectInterval: time.Nanosecond,
 		Frontend: frontend,
 	}).Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if attempts.Load() != 2 {
-		t.Fatalf("reconnect attempts = %d, want 2", attempts.Load())
+	if bytes.Contains(logs.Bytes(), []byte("session.reconnecting")) || bytes.Contains(logs.Bytes(), []byte("session.reconnect_failed")) {
+		t.Fatalf("reconnect warnings = %q", logs.String())
+	}
+	if attempts.Load() != 11 {
+		t.Fatalf("reconnect attempts = %d, want 11", attempts.Load())
 	}
 	if got := second.Written(); got != "connected again" {
 		t.Fatalf("reconnected serial output = %q", got)

@@ -18,24 +18,22 @@ import (
 )
 
 type connOptions struct {
-	port              string
-	baud              int
-	dataBits          int
-	parity            string
-	stopBits          string
-	logPath           string
-	timeFormat        string
-	tui               bool
-	hexdump           bool
-	reconnectAttempts int
+	port       string
+	baud       int
+	dataBits   int
+	parity     string
+	stopBits   string
+	logPath    string
+	timeFormat string
+	tui        bool
+	hexdump    bool
 }
 
 type connFlags struct {
-	logPath           string
-	timeFormat        string
-	useTUI            bool
-	hexdump           bool
-	reconnectAttempts int
+	logPath    string
+	timeFormat string
+	useTUI     bool
+	hexdump    bool
 }
 
 const (
@@ -51,20 +49,18 @@ func bindConnFlags(cmd *cobra.Command, flags *connFlags) {
 	cmd.Flags().Lookup("time").NoOptDefVal = defaultReceiveTimeFormat
 	cmd.Flags().BoolVar(&flags.useTUI, "tui", false, "open the modern full-screen interface")
 	cmd.MarkFlagsMutuallyExclusive("hexdump", "tui")
-	cmd.Flags().IntVar(&flags.reconnectAttempts, "reconnect", 5, "number of reconnect attempts after disconnection (0 disables)")
 }
 
 func parseConnOptions(args []string, logPath, timeFormat string, useTUI bool) (connOptions, error) {
 	opts := connOptions{
-		port:              args[0],
-		baud:              defaultConnBaud,
-		dataBits:          8,
-		parity:            "none",
-		stopBits:          "1",
-		logPath:           logPath,
-		timeFormat:        timeFormat,
-		tui:               useTUI,
-		reconnectAttempts: 5,
+		port:       args[0],
+		baud:       defaultConnBaud,
+		dataBits:   8,
+		parity:     "none",
+		stopBits:   "1",
+		logPath:    logPath,
+		timeFormat: timeFormat,
+		tui:        useTUI,
 	}
 
 	if len(args) == 1 {
@@ -202,12 +198,6 @@ func runConn(ctx context.Context, opts connOptions) error {
 		Port:              port,
 		Reconnect:         openPort,
 		ReconnectInterval: time.Second,
-		ReconnectAttempts: func() int {
-			if opts.reconnectAttempts == 0 {
-				return -1
-			}
-			return opts.reconnectAttempts
-		}(),
 		OpenConnection:    openConnection,
 		Frontend:          frontend,
 		ReceiveLog:        receiveLog,

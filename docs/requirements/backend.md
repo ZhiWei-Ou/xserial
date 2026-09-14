@@ -14,7 +14,7 @@ serial adapter <-> backend kernel <-> middleware <-> rawui / tui
 
 - 用户连接成功后，可以持续收发串口数据，不因 UI 刷新、日志或后台状态提示污染设备字节。
 - 设备断开后，会话不会立即消失，而是显示重连状态并允许用户主动退出。
-- 重连成功后继续使用同一界面；重连耗尽后给出明确错误并正常回到终端。
+- 重连成功后继续使用同一界面；重连期间可主动退出并正常回到终端。
 - 发送失败、设备断开和程序退出都不会留下失效的 raw terminal 状态或后台任务。
 
 ## 连接与重连
@@ -28,14 +28,10 @@ serial adapter <-> backend kernel <-> middleware <-> rawui / tui
 ### 连接后断开
 
 - 设备断开或串口读写失败后，Backend 进入 `disconnected`，终止当前串口 I/O，并通知 Middleware。
-- 默认每隔 1 秒重试同一端口，最多 5 次。
-- CLI 增加 `--reconnect <count>`：
-  - 默认值为 `5`；
-  - `0` 表示禁用自动重连；
-  - 参数必须是非负整数。
-- 每次尝试都产生包含当前次数和总次数的状态；Backend 不生成面向用户的自然语言文案。
+- 每隔 1 秒在后台重试同一端口，直到成功或取消，不限制次数。
+- CLI 不提供重连次数参数，重试过程不打印警告日志；断线和恢复时各提示一次。
+- 每次尝试都产生包含当前次数的状态；Backend 不生成面向用户的自然语言文案。
 - 重连成功后进入 `connected`，重试计数清零。
-- 重连次数耗尽后，会话以最后一次连接错误结束。
 - 活动文件传输或其他独占操作在断线时立即失败，不自动重试或续传。
 
 ## 字节收发
@@ -62,7 +58,7 @@ Backend 至少区分以下状态：
 ```text
 opening -> connected -> disconnected -> reconnecting -> connected
                     \-> closing -----------------------> closed
-reconnecting -> exhausted -> closed
+reconnecting -> closing -> closed
 ```
 
 - 状态变化必须有确定顺序，不能重复报告互相矛盾的状态。

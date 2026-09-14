@@ -103,19 +103,19 @@ sequenceDiagram
     R->>B: read/write failure
     B->>P: Close，解除阻塞 I/O
     B->>M: Disconnected
-    loop 最多 reconnect attempts 次
-        B->>M: Reconnecting attempt/limit
+    loop 每隔 1 秒重试，直到成功或取消
+        B->>M: Reconnecting attempt
         B->>P: Open
     end
     alt 重连成功
         B->>M: Reconnected
         B->>B: 启动新 reader
-    else 次数耗尽
-        B-->>M: ErrReconnectExhausted
+    else 用户退出或取消
+        B-->>M: 结束重连并关闭会话
     end
 ```
 
-默认重连 5 次、固定间隔 1 秒；`--reconnect 0` 禁用。backend 只允许生命周期所有者替换和关闭当前 port，旧连接事件通过 generation 隔离。
+后台无限重连、固定间隔 1 秒，可由用户退出或取消；CLI 不提供重连参数，重试过程不打印警告日志。backend 只允许生命周期所有者替换和关闭当前 port，旧连接事件通过 generation 隔离。
 
 ## 5. Frontend 契约
 

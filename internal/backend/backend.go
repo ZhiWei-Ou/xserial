@@ -11,15 +11,9 @@ import (
 	"github.com/ZhiWei-Ou/xserial/internal/transfer"
 )
 
-var (
-	ErrDisconnected       = errors.New("serial port is disconnected")
-	ErrReconnectExhausted = errors.New("serial port reconnect attempts exhausted")
-)
+var ErrDisconnected = errors.New("serial port is disconnected")
 
-const (
-	DefaultReconnectAttempts = 5
-	DefaultReconnectInterval = time.Second
-)
+const DefaultReconnectInterval = time.Second
 
 type Port interface{ io.ReadWriteCloser }
 
@@ -37,8 +31,8 @@ type Disconnected struct{ Err error }
 func (Disconnected) isBackendEvent() {}
 
 type Reconnecting struct {
-	Attempt, Limit int
-	Err            error
+	Attempt int
+	Err     error
 }
 
 func (Reconnecting) isBackendEvent() {}
@@ -50,7 +44,6 @@ func (Reconnected) isBackendEvent() {}
 type Config struct {
 	Port              Port
 	Reconnect         func() (Port, error)
-	ReconnectAttempts int
 	ReconnectInterval time.Duration
 }
 
@@ -324,11 +317,7 @@ func (s *Session) startReader(ctx context.Context, e *Endpoint, port Port, gener
 }
 
 func (s *Session) reconnect(ctx context.Context, e *Endpoint, open func() (Port, error), cause error) (Port, func() (Port, error), int, chan error, error) {
-	limit := s.cfg.ReconnectAttempts
-	if limit < 0 {
-		limit = 0
-	}
-	if open == nil || limit == 0 {
+	if open == nil {
 		return nil, open, 0, nil, cause
 	}
 	interval := s.cfg.ReconnectInterval
@@ -336,8 +325,8 @@ func (s *Session) reconnect(ctx context.Context, e *Endpoint, open func() (Port,
 		interval = DefaultReconnectInterval
 	}
 	lastErr := cause
-	for attempt := 1; attempt <= limit; {
-		e.emit(Reconnecting{Attempt: attempt, Limit: limit, Err: lastErr})
+	for attempt := 1; ; {
+		e.emit(Reconnecting{Attempt: attempt, Err: lastErr})
 		timer := time.NewTimer(interval)
 		select {
 		case <-timer.C:
@@ -360,7 +349,6 @@ func (s *Session) reconnect(ctx context.Context, e *Endpoint, open func() (Port,
 			return nil, open, attempt - 1, nil, context.Canceled
 		}
 	}
-	return nil, open, limit, nil, fmt.Errorf("%w: %w", ErrReconnectExhausted, lastErr)
 }
 
 func normalizeError(err error) error {

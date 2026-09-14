@@ -55,7 +55,6 @@ func (Reconnected) isSessionEvent() {}
 
 type Reconnecting struct {
 	Attempt int
-	Limit   int
 	Err     error
 }
 
@@ -139,7 +138,6 @@ type Config struct {
 	Port              SerialPort
 	Reconnect         func() (SerialPort, error)
 	ReconnectInterval time.Duration
-	ReconnectAttempts int
 	OpenConnection    func(ConnectionConfig) (SerialPort, error)
 	Frontend          Frontend
 	ReceiveLog        io.Writer
@@ -504,22 +502,13 @@ func (s *Session) Run(parent context.Context) error {
 		cancel()
 		return err
 	}
-	attempts := s.cfg.ReconnectAttempts
-	if attempts == 0 && s.cfg.Reconnect != nil {
-		attempts = backend.DefaultReconnectAttempts
-	}
-	if attempts < 0 {
-		attempts = 0
+	var reconnect func() (backend.Port, error)
+	if s.cfg.Reconnect != nil {
+		reconnect = func() (backend.Port, error) { return s.cfg.Reconnect() }
 	}
 	backendSession := backend.New(backend.Config{
-		Port: s.cfg.Port,
-		Reconnect: func() (backend.Port, error) {
-			if s.cfg.Reconnect == nil {
-				return nil, ErrDisconnected
-			}
-			return s.cfg.Reconnect()
-		},
-		ReconnectAttempts: attempts,
+		Port:              s.cfg.Port,
+		Reconnect:         reconnect,
 		ReconnectInterval: s.cfg.ReconnectInterval,
 	})
 	ready := make(chan *backend.Endpoint, 1)
@@ -626,11 +615,7 @@ func (s *Session) runBackendEvents(ctx context.Context, e *endpoint) error {
 			e.logger.Warn("session.disconnected", "error", event.Err)
 			e.emit(Disconnected{Err: event.Err})
 		case backend.Reconnecting:
-			if event.Attempt > 1 {
-				e.logger.Warn("session.reconnect_failed", "attempt", event.Attempt-1, "error", event.Err)
-			}
-			e.logger.Warn("session.reconnecting", "attempt", event.Attempt, "limit", event.Limit)
-			e.emit(Reconnecting{Attempt: event.Attempt, Limit: event.Limit, Err: event.Err})
+			e.emit(Reconnecting{Attempt: event.Attempt, Err: event.Err})
 		case backend.Reconnected:
 			e.logger.Info("session.reconnected", "attempt", event.Attempt)
 			e.emit(Reconnected{})

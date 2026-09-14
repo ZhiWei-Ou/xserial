@@ -100,7 +100,7 @@ func TestConnectionEventsOnlyUpdateIndicator(t *testing.T) {
 	if m.connected || m.status != "Ready" {
 		t.Fatalf("connected=%v status=%q after disconnect", m.connected, m.status)
 	}
-	m.handleEvent(middleware.Reconnecting{Attempt: 2, Limit: 5})
+	m.handleEvent(middleware.Reconnecting{Attempt: 2})
 	if m.connected || m.status != "Ready" {
 		t.Fatalf("connected=%v status=%q while reconnecting", m.connected, m.status)
 	}
