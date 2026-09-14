@@ -10,7 +10,7 @@ RawUI 通过 [Middleware](middleware.md) 使用 [Backend](backend.md)，不直�
 
 ## 启动与兼容
 
-- 不带 `--tui` 时默认进入 RawUI。
+- 不带 `--TUI` 时默认进入 RawUI。
 - 使用以下唯一连接形式：
 
   ```text

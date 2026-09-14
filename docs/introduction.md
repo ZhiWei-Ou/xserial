@@ -76,10 +76,10 @@ RawUI 是默认界面，适合文本输出、Shell 和 Console 设备。普通�
 
 ## TUI：全屏终端工作区
 
-加入 `--tui` 可以进入全屏界面：
+加入 `--TUI` 可以进入全屏界面（Beta，不稳定）：
 
 ```bash
-xserial /dev/ttyUSB0 --tui
+xserial /dev/ttyUSB0 --TUI
 ```
 
 TUI 在终端交互之外集中显示连接状态和收发统计，并提供串口配置侧栏。配置端口、波特率或帧参数后，确认操作会使用新配置替换当前连接。

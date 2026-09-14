@@ -93,7 +93,7 @@ func TestRootConnectsFromPositionalConfig(t *testing.T) {
 			return nil
 		},
 	})
-	cmd.SetArgs([]string{"custom-port", "9600,7,e,2", "--tui"})
+	cmd.SetArgs([]string{"custom-port", "9600,7,e,2", "--TUI"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -211,7 +211,7 @@ func TestRootRejectsHexdumpWithTUI(t *testing.T) {
 		t.Fatal("connection should not be opened")
 		return nil
 	}})
-	cmd.SetArgs([]string{"test-port", "-h", "--tui"})
+	cmd.SetArgs([]string{"test-port", "-h", "--TUI"})
 	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "hexdump") {
 		t.Fatalf("Execute() error = %v", err)
 	}

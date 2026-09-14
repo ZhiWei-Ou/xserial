@@ -22,7 +22,7 @@ func TestConnShowsOnlyCurrentPlatformExamples(t *testing.T) {
 	if !strings.Contains(cmd.Example, wantExample) {
 		t.Fatalf("Example = %q, want %q", cmd.Example, wantExample)
 	}
-	wantTUIExample := "xserial " + want + " --tui"
+	wantTUIExample := "xserial " + want + " --TUI"
 	if !strings.Contains(cmd.Example, wantTUIExample) {
 		t.Fatalf("Example = %q, want %q", cmd.Example, wantTUIExample)
 	}
@@ -74,10 +74,10 @@ func TestConnExposesReceiveLog(t *testing.T) {
 	if flag := cmd.Flags().Lookup("log-time-format"); flag != nil {
 		t.Fatal("legacy --log-time-format flag exists, want nil")
 	}
-	if flag := cmd.Flags().Lookup("tui"); flag == nil {
-		t.Fatal("--tui flag not found")
+	if flag := cmd.Flags().Lookup("TUI"); flag == nil {
+		t.Fatal("--TUI flag not found")
 	} else if flag.DefValue != "false" {
-		t.Fatalf("--tui default = %q, want false", flag.DefValue)
+		t.Fatalf("--TUI default = %q, want false", flag.DefValue)
 	}
 	if flag := cmd.Flags().Lookup("reconnect"); flag != nil {
 		t.Fatal("--reconnect flag should not exist")

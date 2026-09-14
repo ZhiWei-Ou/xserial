@@ -62,7 +62,7 @@ baud[,data-bits[,parity[,stop-bits]]]
 Open the full-screen interface:
 
 ```bash
-xserial /dev/ttyUSB0 --tui
+xserial /dev/ttyUSB0 --TUI
 ```
 
 On macOS, ports commonly look like `/dev/cu.usbserial-0001`. On Windows, use the COM name directly, for example `xserial COM3`.
@@ -71,7 +71,7 @@ On macOS, ports commonly look like `/dev/cu.usbserial-0001`. On Windows, use the
 
 RawUI is the default. Keyboard input is sent directly to the device, and received bytes are written to `stdout` without local UI output mixed into the stream. Press `Ctrl-P h` for local commands or `Ctrl-P q` to leave the session.
 
-The full-screen TUI provides a terminal workspace, connection statistics, a command palette, and an editable configuration sidebar. Use `Ctrl-P` for commands, `Ctrl-P c` to focus serial configuration, and `Ctrl-C` to quit.
+The full-screen TUI is Beta and unstable. It provides a terminal workspace, connection statistics, a command palette, and an editable configuration sidebar. Use `Ctrl-P` for commands, `Ctrl-P c` to focus serial configuration, and `Ctrl-C` to quit.
 
 ## Hexdump output
 
@@ -82,7 +82,7 @@ xserial /dev/ttyUSB0 -h
 xserial /dev/ttyUSB0 --hexdump --time
 ```
 
-Each received chunk is printed immediately in rows of up to 16 bytes, with continuous byte offsets and CRLF line endings. `--time` prefixes each dump row. Keyboard input and receive logging keep their existing behavior. Hexdump is available in RawUI and cannot be combined with `--tui`. Use `--help` for CLI help; `-h` selects hexdump.
+Each received chunk is printed immediately in rows of up to 16 bytes, with continuous byte offsets and CRLF line endings. `--time` prefixes each dump row. Keyboard input and receive logging keep their existing behavior. Hexdump is available in RawUI and cannot be combined with `--TUI`. Use `--help` for CLI help; `-h` selects hexdump.
 
 ## Logging and timestamps
 

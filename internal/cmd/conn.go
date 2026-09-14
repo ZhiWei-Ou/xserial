@@ -47,8 +47,8 @@ func bindConnFlags(cmd *cobra.Command, flags *connFlags) {
 	cmd.Flags().StringVar(&flags.logPath, "log", "", "append received bytes to file")
 	cmd.Flags().StringVar(&flags.timeFormat, "time", "", "time format prepended to each received line")
 	cmd.Flags().Lookup("time").NoOptDefVal = defaultReceiveTimeFormat
-	cmd.Flags().BoolVar(&flags.useTUI, "tui", false, "open the modern full-screen interface")
-	cmd.MarkFlagsMutuallyExclusive("hexdump", "tui")
+	cmd.Flags().BoolVar(&flags.useTUI, "TUI", false, "open the full-screen interface (Beta, unstable)")
+	cmd.MarkFlagsMutuallyExclusive("hexdump", "TUI")
 }
 
 func parseConnOptions(args []string, logPath, timeFormat string, useTUI bool) (connOptions, error) {
