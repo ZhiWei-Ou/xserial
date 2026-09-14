@@ -3,6 +3,8 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"runtime/debug"
 	"strings"
 	"testing"
@@ -139,7 +141,7 @@ func TestRootHelpRoutes(t *testing.T) {
 	}
 }
 
-func TestVersionCommandIsTheOnlyVersionRoute(t *testing.T) {
+func TestVersionCommandShowsShortVersion(t *testing.T) {
 	cmd := NewRootCommand()
 	var output bytes.Buffer
 	cmd.SetOut(&output)
@@ -152,15 +154,6 @@ func TestVersionCommandIsTheOnlyVersionRoute(t *testing.T) {
 		t.Fatalf("version output = %q", output.String())
 	}
 
-	for _, arg := range []string{"-v", "--version"} {
-		t.Run(arg, func(t *testing.T) {
-			cmd := NewRootCommand()
-			cmd.SetArgs([]string{arg})
-			if err := cmd.Execute(); err == nil {
-				t.Fatalf("Execute() with %s succeeded, want unknown flag error", arg)
-			}
-		})
-	}
 }
 
 func TestRootHelpShowsCompactXserialLogo(t *testing.T) {
@@ -216,3 +209,54 @@ func TestRootRejectsHexdumpWithTUI(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 }
+
+func TestVersionFlagsShowBuildInfoWithoutConnecting(t *testing.T) {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		t.Fatal("test binary has no build info")
+	}
+	for _, args := range [][]string{{"-v"}, {"--version"}, {"test-port", "-v"}} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			cmd := newRootCommand(rootDependencies{conn: func(context.Context, connOptions) error { t.Fatal("version must not open a port"); return nil }})
+			var output bytes.Buffer
+			cmd.SetOut(&output)
+			cmd.SetArgs(args)
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(output.String(), "Go:          "+info.GoVersion) || strings.Contains(output.String(), "dep\t") {
+				t.Fatalf("version output = %q", output.String())
+			}
+		})
+	}
+}
+
+func TestDetailedVersionPreservesBuildMetadata(t *testing.T) {
+	info := &debug.BuildInfo{GoVersion: "go1.26.2", Path: "example.com/app/cmd/app", Main: debug.Module{Path: "example.com/app", Version: "(devel)"}, Settings: []debug.BuildSetting{{Key: "GOOS", Value: "linux"}, {Key: "GOARCH", Value: "arm64"}, {Key: "vcs.time", Value: "2026-09-14T13:47:29Z"}, {Key: "vcs.revision", Value: "abcdef"}, {Key: "vcs.modified", Value: "true"}}}
+	var output bytes.Buffer
+	if err := writeBuildInfo(&output, info, true); err != nil {
+		t.Fatal(err)
+	}
+	want := "Version:     (devel)\nGo:          go1.26.2\nPlatform:    linux/arm64\nCommit:      abcdef\nCommit time: 2026-09-14T13:47:29Z\nModified:    true\n"
+	if output.String() != want {
+		t.Fatalf("output = %q, want %q", output.String(), want)
+	}
+	var minimal bytes.Buffer
+	if err := writeBuildInfo(&minimal, &debug.BuildInfo{GoVersion: "go1.26.2"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if minimal.String() != "Go:          go1.26.2\n" {
+		t.Fatalf("minimal output = %q", minimal.String())
+	}
+
+	if err := writeBuildInfo(&output, nil, false); err == nil {
+		t.Fatal("missing build info should return an error")
+	}
+	if err := writeBuildInfo(versionErrorWriter{}, info, true); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("write error = %v", err)
+	}
+}
+
+type versionErrorWriter struct{}
+
+func (versionErrorWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }

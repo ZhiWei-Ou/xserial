@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"runtime/debug"
+	"strings"
 
 	"github.com/ZhiWei-Ou/xserial/internal/serialport"
 	"github.com/spf13/cobra"
@@ -33,6 +36,7 @@ func NewRootCommand() *cobra.Command {
 func newRootCommand(deps rootDependencies) *cobra.Command {
 	version := currentVersion()
 	var flags connFlags
+	var showVersion bool
 
 	rootCmd := &cobra.Command{
 		Use:           "xserial [port] [cfg]",
@@ -42,6 +46,10 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 		SilenceUsage:  true,
 		Args:          cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if showVersion {
+				info, ok := debug.ReadBuildInfo()
+				return writeBuildInfo(cmd.OutOrStdout(), info, ok)
+			}
 			if len(args) == 0 {
 				return cmd.Help()
 			}
@@ -56,6 +64,7 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 
 	rootCmd.SetHelpTemplate(fmt.Sprintf(asciiPrefix, version) + "\n" + rootCmd.HelpTemplate())
 	bindConnFlags(rootCmd, &flags)
+	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "show version and build summary")
 	rootCmd.AddCommand(newListCommand(deps.list))
 	rootCmd.AddCommand(newVersionCommand(version))
 	return rootCmd
@@ -92,4 +101,30 @@ func versionFromBuildInfo(info *debug.BuildInfo, ok bool) string {
 		return fallbackVersion
 	}
 	return info.Main.Version
+}
+
+func writeBuildInfo(w io.Writer, info *debug.BuildInfo, ok bool) error {
+	if !ok {
+		return errors.New("Go build information is unavailable")
+	}
+	settings := make(map[string]string, len(info.Settings))
+	for _, setting := range info.Settings {
+		settings[setting.Key] = setting.Value
+	}
+	var output strings.Builder
+	fields := []struct{ label, value string }{
+		{"Version", info.Main.Version},
+		{"Go", info.GoVersion},
+		{"Platform", strings.Trim(strings.Join([]string{settings["GOOS"], settings["GOARCH"]}, "/"), "/")},
+		{"Commit", settings["vcs.revision"]},
+		{"Commit time", settings["vcs.time"]},
+		{"Modified", settings["vcs.modified"]},
+	}
+	for _, field := range fields {
+		if field.value != "" {
+			fmt.Fprintf(&output, "%-12s %s\n", field.label+":", field.value)
+		}
+	}
+	_, err := io.WriteString(w, output.String())
+	return err
 }

@@ -110,3 +110,7 @@ xserial /dev/ttyUSB0 --log device.log -t
 ```bash
 go test ./...
 ```
+
+## Version information
+
+`xserial version` prints the short version. Use `xserial -v` or `xserial --version` for a concise summary from Go's `runtime/debug.ReadBuildInfo`: module version, Go version, target platform, commit, commit time, and modified status. Only available fields are shown. Development module versions remain `(devel)`; missing metadata is not inferred from Git or the injected release version.
