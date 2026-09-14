@@ -30,10 +30,10 @@ type connOptions struct {
 }
 
 type connFlags struct {
-	logPath    string
-	timeFormat string
-	useTUI     bool
-	hexdump    bool
+	logPath  string
+	showTime bool
+	useTUI   bool
+	hexdump  bool
 }
 
 const (
@@ -45,22 +45,24 @@ func bindConnFlags(cmd *cobra.Command, flags *connFlags) {
 	cmd.Flags().Bool("help", false, "help for xserial")
 	cmd.Flags().BoolVarP(&flags.hexdump, "hexdump", "h", false, "display received bytes as a hex and ASCII dump")
 	cmd.Flags().StringVar(&flags.logPath, "log", "", "append received bytes to file")
-	cmd.Flags().StringVar(&flags.timeFormat, "time", "", "time format prepended to each received line")
-	cmd.Flags().Lookup("time").NoOptDefVal = defaultReceiveTimeFormat
+	cmd.Flags().BoolVarP(&flags.showTime, "time", "t", false, "prepend timestamps (HH:MM:SS.mmm) to received lines")
 	cmd.Flags().BoolVar(&flags.useTUI, "TUI", false, "open the full-screen interface (Beta, unstable)")
 	cmd.MarkFlagsMutuallyExclusive("hexdump", "TUI")
 }
 
-func parseConnOptions(args []string, logPath, timeFormat string, useTUI bool) (connOptions, error) {
+func parseConnOptions(args []string, logPath string, showTime, useTUI bool) (connOptions, error) {
 	opts := connOptions{
-		port:       args[0],
-		baud:       defaultConnBaud,
-		dataBits:   8,
-		parity:     "none",
-		stopBits:   "1",
-		logPath:    logPath,
-		timeFormat: timeFormat,
-		tui:        useTUI,
+		port:     args[0],
+		baud:     defaultConnBaud,
+		dataBits: 8,
+		parity:   "none",
+		stopBits: "1",
+		logPath:  logPath,
+		tui:      useTUI,
+	}
+
+	if showTime {
+		opts.timeFormat = defaultReceiveTimeFormat
 	}
 
 	if len(args) == 1 {

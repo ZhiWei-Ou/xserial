@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"runtime"
 	"strings"
 	"testing"
@@ -65,11 +66,11 @@ func TestConnExposesReceiveLog(t *testing.T) {
 	if timeFlag == nil {
 		t.Fatal("--time flag not found")
 	}
-	if timeFlag.DefValue != "" {
-		t.Fatalf("--time default = %q, want empty", timeFlag.DefValue)
+	if timeFlag.DefValue != "false" {
+		t.Fatalf("--time default = %q, want false", timeFlag.DefValue)
 	}
-	if timeFlag.NoOptDefVal != defaultReceiveTimeFormat {
-		t.Fatalf("--time no-argument value = %q, want %q", timeFlag.NoOptDefVal, defaultReceiveTimeFormat)
+	if timeFlag.Shorthand != "t" {
+		t.Fatalf("--time shorthand = %q, want t", timeFlag.Shorthand)
 	}
 	if flag := cmd.Flags().Lookup("log-time-format"); flag != nil {
 		t.Fatal("legacy --log-time-format flag exists, want nil")
@@ -84,21 +85,36 @@ func TestConnExposesReceiveLog(t *testing.T) {
 	}
 }
 
-func TestConnTimeFlagAcceptsOmittedOrExplicitFormat(t *testing.T) {
-	cmd := NewRootCommand()
-	if err := cmd.ParseFlags([]string{"--time"}); err != nil {
-		t.Fatalf("ParseFlags(--time) error = %v", err)
+func TestConnTimeFlagUsesFixedFormat(t *testing.T) {
+	for _, flag := range []string{"", "-t", "--time"} {
+		t.Run(flag, func(t *testing.T) {
+			var got connOptions
+			cmd := newRootCommand(rootDependencies{conn: func(_ context.Context, opts connOptions) error { got = opts; return nil }})
+			args := []string{"test-port"}
+			if flag != "" {
+				args = append(args, flag)
+			}
+			cmd.SetArgs(args)
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			want := ""
+			if flag != "" {
+				want = defaultReceiveTimeFormat
+			}
+			if got.timeFormat != want {
+				t.Fatalf("time format = %q, want %q", got.timeFormat, want)
+			}
+		})
 	}
-	if got := cmd.Flags().Lookup("time").Value.String(); got != defaultReceiveTimeFormat {
-		t.Fatalf("--time value = %q, want %q", got, defaultReceiveTimeFormat)
-	}
+}
 
-	cmd = NewRootCommand()
-	if err := cmd.ParseFlags([]string{"--time=2006-01-02 15:04:05"}); err != nil {
-		t.Fatalf("ParseFlags(--time=format) error = %v", err)
-	}
-	if got := cmd.Flags().Lookup("time").Value.String(); got != "2006-01-02 15:04:05" {
-		t.Fatalf("--time value = %q", got)
+func TestConnTimeFlagRejectsCustomFormat(t *testing.T) {
+	for _, flag := range []string{"--time=2006-01-02 15:04:05", "-t=15:04:05"} {
+		cmd := NewRootCommand()
+		if err := cmd.ParseFlags([]string{flag}); err == nil {
+			t.Fatalf("ParseFlags(%q) succeeded", flag)
+		}
 	}
 }
 
@@ -124,7 +140,7 @@ func TestConnDoesNotExposePortFlag(t *testing.T) {
 }
 
 func TestParseConnOptionsUsesScreenStyleDefaults(t *testing.T) {
-	opts, err := parseConnOptions([]string{"/dev/ttyUSB0"}, "", "", false)
+	opts, err := parseConnOptions([]string{"/dev/ttyUSB0"}, "", false, false)
 	if err != nil {
 		t.Fatalf("parseConnOptions() error = %v", err)
 	}
@@ -151,14 +167,14 @@ func TestParseConnOptionsAcceptsPartialPositionalConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.cfg, func(t *testing.T) {
-			opts, err := parseConnOptions([]string{"COM3", tt.cfg}, "capture.log", "15:04:05", true)
+			opts, err := parseConnOptions([]string{"COM3", tt.cfg}, "capture.log", true, true)
 			if err != nil {
 				t.Fatalf("parseConnOptions() error = %v", err)
 			}
 			if opts.baud != tt.baud || opts.dataBits != tt.dataBits || opts.parity != tt.parity || opts.stopBits != tt.stopBits {
 				t.Fatalf("parseConnOptions() = %#v", opts)
 			}
-			if opts.logPath != "capture.log" || opts.timeFormat != "15:04:05" || !opts.tui {
+			if opts.logPath != "capture.log" || opts.timeFormat != defaultReceiveTimeFormat || !opts.tui {
 				t.Fatalf("parseConnOptions() = %#v, want log, time, and TUI options preserved", opts)
 			}
 		})
@@ -168,7 +184,7 @@ func TestParseConnOptionsAcceptsPartialPositionalConfig(t *testing.T) {
 func TestParseConnOptionsRejectsInvalidConfig(t *testing.T) {
 	for _, cfg := range []string{"", "0", "baud", "9600,", "9600,0", "9600,8,X", "9600,8,N,3", "9600,8,N,1,extra"} {
 		t.Run(cfg, func(t *testing.T) {
-			if _, err := parseConnOptions([]string{"COM3", cfg}, "", "", false); err == nil {
+			if _, err := parseConnOptions([]string{"COM3", cfg}, "", false, false); err == nil {
 				t.Fatalf("parseConnOptions(%q) error = nil, want error", cfg)
 			}
 		})

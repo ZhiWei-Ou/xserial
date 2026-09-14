@@ -92,11 +92,11 @@ Append received data to a file:
 xserial /dev/ttyUSB0 --log device.log
 ```
 
-Add the default millisecond timestamp or provide a custom Go time format:
+Add timestamps with `-t` or `--time`. The format is fixed to `HH:MM:SS.mmm`:
 
 ```bash
 xserial /dev/ttyUSB0 --time
-xserial /dev/ttyUSB0 --log device.log --time="2006-01-02 15:04:05.000"
+xserial /dev/ttyUSB0 --log device.log -t
 ```
 
 ## Documentation

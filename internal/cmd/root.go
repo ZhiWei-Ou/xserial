@@ -45,7 +45,7 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 			if len(args) == 0 {
 				return cmd.Help()
 			}
-			opts, err := parseConnOptions(args, flags.logPath, flags.timeFormat, flags.useTUI)
+			opts, err := parseConnOptions(args, flags.logPath, flags.showTime, flags.useTUI)
 			if err != nil {
 				return err
 			}

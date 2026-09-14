@@ -103,18 +103,11 @@ TUI 在终端交互之外集中显示连接状态和收发统计，并提供串�
 xserial /dev/ttyUSB0 --log device.log
 ```
 
-单独使用 `--time` 时，默认格式是 `15:04:05.000`：
+使用 `-t` 或 `--time` 开启时间戳，格式固定为 `15:04:05.000`（时:分:秒.毫秒），不支持自定义格式：
 
 ```bash
 xserial /dev/ttyUSB0 --time
-```
-
-也可以提供自定义的 Go 时间格式：
-
-```bash
-xserial /dev/ttyUSB0 \
-  --log device.log \
-  --time="2006-01-02 15:04:05.000"
+xserial /dev/ttyUSB0 --log device.log -t
 ```
 
 不启用 `--time` 时，RawUI 的设备输出保持逐字节透明。启用后，实时输出和接收日志会按行增加时间前缀。
