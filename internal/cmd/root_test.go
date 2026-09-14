@@ -186,3 +186,33 @@ func TestRootHelpShowsDirectConnectionExample(t *testing.T) {
 		t.Fatalf("Example = %q, want direct port %q", cmd.Example, directConnExamplePort)
 	}
 }
+
+func TestRootHexdumpFlags(t *testing.T) {
+	for _, args := range [][]string{{"-h", "test-port"}, {"test-port", "--hexdump", "--time"}, {"test-port"}} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			var got connOptions
+			cmd := newRootCommand(rootDependencies{conn: func(_ context.Context, opts connOptions) error {
+				got = opts
+				return nil
+			}})
+			cmd.SetArgs(args)
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if got.port != "test-port" || got.hexdump != (len(args) > 1) {
+				t.Fatalf("connection options = %#v", got)
+			}
+		})
+	}
+}
+
+func TestRootRejectsHexdumpWithTUI(t *testing.T) {
+	cmd := newRootCommand(rootDependencies{conn: func(context.Context, connOptions) error {
+		t.Fatal("connection should not be opened")
+		return nil
+	}})
+	cmd.SetArgs([]string{"test-port", "-h", "--tui"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "hexdump") {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}

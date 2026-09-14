@@ -61,6 +61,7 @@ type Config struct {
 	Local      io.Writer
 	PrefixKey  byte
 	TimeFormat string
+	Hexdump    bool
 }
 
 type Frontend struct {
@@ -185,6 +186,10 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 	deviceOutput := f.cfg.Output
 	if f.cfg.TimeFormat != "" {
 		deviceOutput = linetime.NewWriter(deviceOutput, f.cfg.TimeFormat)
+	}
+
+	if f.cfg.Hexdump {
+		deviceOutput = &hexWriter{dst: deviceOutput}
 	}
 
 	for {

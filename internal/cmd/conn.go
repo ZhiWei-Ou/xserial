@@ -26,6 +26,7 @@ type connOptions struct {
 	logPath           string
 	timeFormat        string
 	tui               bool
+	hexdump           bool
 	reconnectAttempts int
 }
 
@@ -33,6 +34,7 @@ type connFlags struct {
 	logPath           string
 	timeFormat        string
 	useTUI            bool
+	hexdump           bool
 	reconnectAttempts int
 }
 
@@ -42,10 +44,13 @@ const (
 )
 
 func bindConnFlags(cmd *cobra.Command, flags *connFlags) {
+	cmd.Flags().Bool("help", false, "help for xserial")
+	cmd.Flags().BoolVarP(&flags.hexdump, "hexdump", "h", false, "display received bytes as a hex and ASCII dump")
 	cmd.Flags().StringVar(&flags.logPath, "log", "", "append received bytes to file")
 	cmd.Flags().StringVar(&flags.timeFormat, "time", "", "time format prepended to each received line")
 	cmd.Flags().Lookup("time").NoOptDefVal = defaultReceiveTimeFormat
 	cmd.Flags().BoolVar(&flags.useTUI, "tui", false, "open the modern full-screen interface")
+	cmd.MarkFlagsMutuallyExclusive("hexdump", "tui")
 	cmd.Flags().IntVar(&flags.reconnectAttempts, "reconnect", 5, "number of reconnect attempts after disconnection (0 disables)")
 }
 
@@ -185,6 +190,7 @@ func runConn(ctx context.Context, opts connOptions) error {
 		logger.Info("session.ready", "help", "Ctrl-P h", "quit", "Ctrl-P q")
 		frontend = rawui.New(rawui.Config{
 			Terminal:   rawui.NewOSTerminal(os.Stdin),
+			Hexdump:    opts.hexdump,
 			Input:      os.Stdin,
 			Output:     os.Stdout,
 			Local:      logger,

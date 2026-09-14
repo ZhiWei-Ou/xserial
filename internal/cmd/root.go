@@ -54,6 +54,7 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 				return err
 			}
 			opts.reconnectAttempts = flags.reconnectAttempts
+			opts.hexdump = flags.hexdump
 			return deps.conn(cmd.Context(), opts)
 		},
 	}

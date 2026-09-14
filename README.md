@@ -73,6 +73,17 @@ RawUI is the default. Keyboard input is sent directly to the device, and receive
 
 The full-screen TUI provides a terminal workspace, connection statistics, a command palette, and an editable configuration sidebar. Use `Ctrl-P` for commands, `Ctrl-P c` to focus serial configuration, and `Ctrl-C` to quit.
 
+## Hexdump output
+
+Display received bytes as offset, hexadecimal bytes, and ASCII (similar to `hexdump -C`):
+
+```bash
+xserial /dev/ttyUSB0 -h
+xserial /dev/ttyUSB0 --hexdump --time
+```
+
+Each received chunk is printed immediately in rows of up to 16 bytes, with continuous byte offsets and CRLF line endings. `--time` prefixes each dump row. Keyboard input and receive logging keep their existing behavior. Hexdump is available in RawUI and cannot be combined with `--tui`. Use `--help` for CLI help; `-h` selects hexdump.
+
 ## Logging and timestamps
 
 Append received data to a file:
