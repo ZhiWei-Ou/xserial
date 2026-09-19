@@ -115,8 +115,39 @@ func TestRawFrontendUsesCtrlPAndRestoresTerminal(t *testing.T) {
 	if got != string([]byte{'v', DefaultPrefixKey}) {
 		t.Fatalf("serial output = %v", []byte(got))
 	}
-	if !bytes.Contains(local.Bytes(), []byte("Ctrl-P h")) {
+	if !bytes.Contains(local.Bytes(), []byte("Ctrl-P h")) || !bytes.Contains(local.Bytes(), []byte("Ctrl-P i")) {
 		t.Fatalf("help = %q", local.String())
+	}
+}
+
+func TestRawFrontendShowsConfigurationOnRequest(t *testing.T) {
+	for _, input := range []string{"x", "\x10ix", "\x10Ix"} {
+		t.Run(input, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			endpoint := &fakeEndpoint{events: make(chan session.Event), cancel: cancel}
+			var local, output bytes.Buffer
+			frontend := New(Config{
+				Terminal:   &fakeTerminal{},
+				Input:      bytes.NewBufferString(input),
+				Output:     &output,
+				Local:      &local,
+				Connection: session.ConnectionConfig{PortName: "/dev/test", BaudRate: 57600, DataBits: 7, Parity: "even", StopBits: "2"},
+			})
+			if err := frontend.Run(ctx, endpoint); err != nil {
+				t.Fatal(err)
+			}
+			want := ""
+			if input != "x" {
+				want = "\r\nPort: /dev/test  Baud: 57600  Data bits: 7  Parity: even  Stop bits: 2\r\n"
+			}
+			if local.String() != want {
+				t.Fatalf("local output = %q, want %q", local.String(), want)
+			}
+			if output.Len() != 0 || endpoint.sent.String() != "x" {
+				t.Fatalf("device output = %q, serial input = %q", output.String(), endpoint.sent.String())
+			}
+		})
 	}
 }
 

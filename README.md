@@ -69,7 +69,7 @@ On macOS, ports commonly look like `/dev/cu.usbserial-0001`. On Windows, use the
 
 ## Interfaces
 
-RawUI is the default. Keyboard input is sent directly to the device, and received bytes are written to `stdout` without local UI output mixed into the stream. Press `Ctrl-P h` for local commands or `Ctrl-P q` to leave the session.
+RawUI is the default. Keyboard input is sent directly to the device, and received bytes are written to `stdout` without local UI output mixed into the stream. Startup and background reconnection are silent. Press `Ctrl-P i` to show the connection configuration, `Ctrl-P h` for local commands or `Ctrl-P q` to leave the session.
 
 The full-screen TUI is Beta and unstable. It provides a terminal workspace, connection statistics, a command palette, and an editable configuration sidebar. Use `Ctrl-P` for commands, `Ctrl-P c` to focus serial configuration, and `Ctrl-C` to quit.
 

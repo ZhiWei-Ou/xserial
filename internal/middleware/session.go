@@ -612,12 +612,10 @@ func (s *Session) runBackendEvents(ctx context.Context, e *endpoint) error {
 			}
 		case backend.Disconnected:
 			e.CancelTransfer()
-			e.logger.Warn("session.disconnected", "error", event.Err)
 			e.emit(Disconnected{Err: event.Err})
 		case backend.Reconnecting:
 			e.emit(Reconnecting{Attempt: event.Attempt, Err: event.Err})
 		case backend.Reconnected:
-			e.logger.Info("session.reconnected", "attempt", event.Attempt)
 			e.emit(Reconnected{})
 		}
 	}

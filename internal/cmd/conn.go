@@ -150,15 +150,9 @@ func runConn(ctx context.Context, opts connOptions) error {
 		defer receiveLog.Close()
 	}
 
-	logger.Info("session.connected", "port", opts.port)
-	logger.Info("session.connected", "baud", opts.baud)
-	logger.Info("session.connected", "data_bits", opts.dataBits)
-	logger.Info("session.connected", "parity", opts.parity)
-	logger.Info("session.connected", "stop_bits", opts.stopBits)
 	var frontend session.Frontend
 	sessionLogger := logger
 	if opts.tui {
-		logger.Info("session.ready", "help", "Ctrl-P", "quit", "Ctrl-C")
 		// The TUI renders transfer status itself; background stderr writes would
 		// corrupt Bubble Tea's alternate-screen output.
 		sessionLogger = nil
@@ -185,8 +179,8 @@ func runConn(ctx context.Context, opts connOptions) error {
 			},
 		})
 	} else {
-		logger.Info("session.ready", "help", "Ctrl-P h", "quit", "Ctrl-P q")
 		frontend = rawui.New(rawui.Config{
+			Connection: connectionConfig,
 			Terminal:   rawui.NewOSTerminal(os.Stdin),
 			Hexdump:    opts.hexdump,
 			Input:      os.Stdin,

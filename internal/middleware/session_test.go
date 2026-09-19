@@ -190,8 +190,8 @@ func TestSessionReconnectsAfterSuccessfulInitialConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if bytes.Contains(logs.Bytes(), []byte("session.reconnecting")) || bytes.Contains(logs.Bytes(), []byte("session.reconnect_failed")) {
-		t.Fatalf("reconnect warnings = %q", logs.String())
+	if logs.Len() != 0 {
+		t.Fatalf("reconnect output = %q, want silence", logs.String())
 	}
 	if attempts.Load() != 11 {
 		t.Fatalf("reconnect attempts = %d, want 11", attempts.Load())

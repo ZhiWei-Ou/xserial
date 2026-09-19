@@ -55,6 +55,7 @@ func (t *OSTerminal) Restore() error {
 }
 
 type Config struct {
+	Connection session.ConnectionConfig
 	Terminal   Terminal
 	Input      io.Reader
 	Output     io.Writer
@@ -96,6 +97,7 @@ type localAction int
 
 const (
 	actionHelp localAction = iota
+	actionInfo
 	actionUpload
 	actionYMODEMUpload
 	actionYMODEMDownload
@@ -110,6 +112,7 @@ type localCommand struct {
 }
 
 var localCommands = []localCommand{
+	{keys: "iI", label: "i", description: "show connection configuration", action: actionInfo},
 	{keys: "hH?", label: "h", description: "show this help", action: actionHelp},
 	{keys: "uU", label: "u", description: "upload raw file", action: actionUpload},
 	{keys: "\x15", label: "Ctrl-U", description: "upload file with YMODEM", action: actionYMODEMUpload},
@@ -287,6 +290,10 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 					}
 				} else if command, ok := findLocalCommand(result.b); ok {
 					switch command.action {
+					case actionInfo:
+						cfg := f.cfg.Connection
+						printLocalLine(f.cfg.Local, "")
+						printLocalLine(f.cfg.Local, fmt.Sprintf("Port: %s  Baud: %d  Data bits: %d  Parity: %s  Stop bits: %s", cfg.PortName, cfg.BaudRate, cfg.DataBits, cfg.Parity, cfg.StopBits))
 					case actionHelp:
 						printHelp(f.cfg.Local)
 					case actionUpload:
