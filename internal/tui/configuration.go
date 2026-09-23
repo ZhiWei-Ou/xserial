@@ -134,10 +134,6 @@ func (m *model) currentConnectionConfig() middleware.ConnectionConfig {
 }
 
 func (m *model) openConfiguration(mode configurationMode) tea.Cmd {
-	if m.transferring {
-		m.status = "Configuration is unavailable during transfer"
-		return nil
-	}
 	if _, ok := m.endpoint.(configurableEndpoint); !ok {
 		m.status = "This session does not support runtime configuration"
 		return nil

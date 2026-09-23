@@ -14,7 +14,7 @@ flowchart TB
 
     Middleware[internal/middleware<br/>会话编排、事件与 Handler Pipeline]
     Backend[internal/backend<br/>串口连接内核]
-    Transfer[internal/transfer<br/>raw upload 与 YMODEM]
+    Transfer[internal/transfer<br/>YMODEM]
 
     Serial[internal/serialport<br/>串口 adapter]
     Logging[internal/logging<br/>结构化业务日志]
@@ -84,10 +84,9 @@ Pipeline 支持四种能力：
 
 动态传输通过临时 `transferGate` 进入 Pipeline：
 
-- raw upload 申请 `ExclusiveOutbound`，防止文件字节与普通用户输入交错；
 - YMODEM 申请 `ExclusiveDuplex`，协议应答被消费到 transfer worker，不会泄漏给 rawui；
 - transfer 完成或取消后移除 gate，释放方向所有权；
-- TUI 产品界面只暴露 raw 文件发送；YMODEM 只属于 rawui 的交互能力。
+- YMODEM 通过 rawui 提供交互入口。
 
 ## 4. Backend 连接内核
 
@@ -129,7 +128,6 @@ type Frontend interface {
 type Endpoint interface {
     Events() <-chan Event
     Send(context.Context, []byte) error
-    StartUpload(context.Context, string) error
     StartYMODEMUpload(context.Context, string) error
     StartYMODEMDownload(context.Context, string) error
     CancelTransfer()
@@ -141,7 +139,7 @@ type Endpoint interface {
 
 - 进入终端 raw mode，并保证所有返回路径恢复终端；
 - 默认情况下普通字节透明地在 stdin/stdout 与串口之间传递；启用 `--time` 后，仅接收显示按行增加时间前缀；
-- `Ctrl-P` 状态机解释本地帮助、退出、raw upload 和 YMODEM；
+- `Ctrl-P` 状态机解释本地帮助、退出和 YMODEM；
 - 本地提示、进度和错误只写 `stderr`，使用 CRLF；
 - 断线和重连状态作为本地提示展示，不污染设备 stdout。
 
@@ -151,7 +149,7 @@ type Endpoint interface {
 - 智能 Hex 输入接受 `AA 01`、`AA01`、`AA,01` 和 `0xAA 0x01`；
 - RX/TX 使用统一时间线，以方向、长度、Hex 和 ASCII 展示；
 - `↑/↓` 浏览发送历史，`PageUp/PageDown` 滚动流量历史；
-- Command Palette 仅提供 raw 文件发送、清屏、取消传输和退出。
+- Command Palette 提供清屏、聚焦配置和退出。
 
 ## 6. 输出与日志契约
 

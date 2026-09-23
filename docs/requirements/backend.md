@@ -94,7 +94,7 @@ reconnecting -> closing -> closed
 
 - 文本和 ANSI 解释；
 - Hex 格式化；
-- raw upload、YMODEM 或其他协议算法；
+- YMODEM 或其他协议算法；
 - 文件记录格式与 `--log`、`--time` 的重新设计；
 - 用户可配置的数据处理 Pipeline；
 - 外部插件加载。

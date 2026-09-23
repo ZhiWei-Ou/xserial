@@ -60,13 +60,6 @@ func (f *Frontend) Run(ctx context.Context, endpoint middleware.Endpoint) error 
 	return nil
 }
 
-type transferMode int
-
-const (
-	transferNone transferMode = iota
-	transferRawUpload
-)
-
 type endpointEventMsg struct{ event middleware.Event }
 type endpointClosedMsg struct{}
 type terminalScrollMsg int
@@ -92,18 +85,9 @@ type command struct {
 }
 
 var commands = []command{
-	{label: "Send raw file", enabled: func(m *model) bool { return m.connected && !m.transferring }, run: func(m *model) tea.Cmd {
-		m.pathMode, m.input, m.status = transferRawUpload, nil, "Enter a local file path for raw upload"
-		return nil
-	}},
 	{label: "Clear terminal", run: func(m *model) tea.Cmd { m.clearTranscript(); return nil }},
-	{key: "c", label: "Focus configuration", enabled: func(m *model) bool { return !m.transferring && showSidebar(max(20, m.width)) }, run: func(m *model) tea.Cmd {
+	{key: "c", label: "Focus configuration", enabled: func(m *model) bool { return showSidebar(max(20, m.width)) }, run: func(m *model) tea.Cmd {
 		m.focus, m.configurationFocusIndex = focusConfiguration, 0
-		return nil
-	}},
-	{label: "Cancel transfer", enabled: func(m *model) bool { return m.transferring }, run: func(m *model) tea.Cmd {
-		m.endpoint.CancelTransfer()
-		m.status = "Canceling transfer…"
 		return nil
 	}},
 	{label: "Quit", run: func(m *model) tea.Cmd { m.endpoint.Quit(); return tea.Quit }},
@@ -120,10 +104,6 @@ type model struct {
 	width                   int
 	height                  int
 	lines                   []string
-	input                   []rune
-	pathMode                transferMode
-	transferMode            transferMode
-	transferring            bool
 	connected               bool
 	palette                 bool
 	paletteIndex            int
@@ -242,19 +222,6 @@ func (m *model) handleEvent(event middleware.Event) {
 			m.scroll += after - before
 		}
 		m.clampScroll()
-	case middleware.UploadStarted:
-		m.transferMode, m.transferring = transferRawUpload, true
-		m.status = fmt.Sprintf("Uploading %s…", event.Path)
-	case middleware.UploadProgress:
-		m.status = fmt.Sprintf("Uploading %s — %s / %s", event.Path, formatBytes(event.Written), formatBytes(event.Total))
-	case middleware.UploadFinished:
-		m.transferMode, m.transferring = transferNone, false
-		if event.Err != nil {
-			m.status = fmt.Sprintf("Upload failed: %v", event.Err)
-		} else {
-			m.txBytes += event.Bytes
-			m.status = fmt.Sprintf("Uploaded %s (%s)", event.Path, formatBytes(event.Bytes))
-		}
 	}
 }
 
@@ -269,7 +236,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key == "ctrl+p" {
 		if m.palette {
 			m.palette = false
-			if m.connected && !m.transferring && m.pathMode == transferNone {
+			if m.connected {
 				return m, m.queueSend([]byte{0x10})
 			}
 			return m, nil
@@ -280,17 +247,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.palette {
 		return m.handlePalette(key)
-	}
-	if key == "esc" && m.transferring {
-		m.endpoint.CancelTransfer()
-		m.status = "Canceling transfer…"
-		return m, nil
-	}
-	if m.pathMode != transferNone {
-		return m.handlePathInput(msg)
-	}
-	if m.transferring {
-		return m, nil
 	}
 	switch key {
 	case "shift+pgup":
@@ -308,26 +264,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, m.queueSend(terminalKeyBytes(msg.Key()))
-}
-
-func (m *model) handlePathInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.Keystroke() {
-	case "esc":
-		m.pathMode = transferNone
-		m.input = nil
-		m.status = "File selection canceled"
-	case "backspace":
-		if len(m.input) > 0 {
-			m.input = m.input[:len(m.input)-1]
-		}
-	case "enter":
-		return m.startFileTransfer()
-	default:
-		if msg.Key().Text != "" {
-			m.input = append(m.input, []rune(msg.Key().Text)...)
-		}
-	}
-	return m, nil
 }
 
 func (m *model) handlePalette(key string) (tea.Model, tea.Cmd) {
@@ -472,35 +408,6 @@ func withAlt(mod tea.KeyMod, data []byte) []byte {
 		return data
 	}
 	return append([]byte{0x1b}, data...)
-}
-
-func (m *model) startFileTransfer() (tea.Model, tea.Cmd) {
-	path := strings.TrimSpace(string(m.input))
-	if path == "" {
-		m.pathMode = transferNone
-		m.status = "File selection canceled"
-		return m, nil
-	}
-	mode := m.pathMode
-	m.pathMode = transferNone
-	m.input = nil
-	err := m.endpoint.StartUpload(context.Background(), path)
-	if err != nil {
-		m.status = fmt.Sprintf("Transfer failed: %v", err)
-		return m, nil
-	}
-	m.transferMode, m.transferring = mode, true
-	m.status = "Starting " + mode.label() + "…"
-	return m, nil
-}
-
-func (m transferMode) label() string {
-	switch m {
-	case transferRawUpload:
-		return "raw upload"
-	default:
-		return "transfer"
-	}
 }
 
 func (m *model) appendTerminalData(data []byte) {
@@ -996,8 +903,6 @@ func (m *model) View() tea.View {
 	var popup string
 	if m.palette {
 		popup = m.renderPalettePopup(min(52, max(28, width-8)))
-	} else if m.pathMode != transferNone {
-		popup = m.renderPathPopup(min(64, max(32, width-8)))
 	} else if m.configuration.mode != configurationNone {
 		popup = m.renderConfigurationPopup(min(64, max(36, width-8)))
 	}
@@ -1017,7 +922,7 @@ func (m *model) View() tea.View {
 	view.BackgroundColor = color.Black
 	view.MouseMode = tea.MouseModeCellMotion
 	view.WindowTitle = "xserial — " + m.portName
-	if !m.palette && m.pathMode == transferNone && m.configuration.mode == configurationNone {
+	if !m.palette && m.configuration.mode == configurationNone {
 		workbenchX := 0
 		if showSidebar(width) {
 			workbenchX = sidebarWidthFor(width) + 1
@@ -1035,7 +940,7 @@ func (m *model) View() tea.View {
 			len(m.configuration.ports),
 		)
 	}
-	if !m.palette && m.pathMode == transferNone && m.configuration.mode == configurationNone && m.focus == focusTerminal {
+	if !m.palette && m.configuration.mode == configurationNone && m.focus == focusTerminal {
 		if cursorX, cursorY, ok := m.terminalCursorPosition(workbenchWidth, bodyHeight); ok {
 			workbenchX := 0
 			if showSidebar(width) {
@@ -1293,18 +1198,6 @@ func (m *model) renderPalettePopup(width int) string {
 	rows = append(rows, "", footerStyle.Render("↑/↓ or j/k select  •  Enter run  •  Esc/q close"))
 	for i := range rows {
 		rows[i] = fitLine(rows[i], width-4)
-	}
-	return paletteStyle.Width(width).Render(strings.Join(rows, "\n"))
-}
-
-func (m *model) renderPathPopup(width int) string {
-	input := promptStyle.Render("Local path › ") + string(m.input) + valueStyle.Render("▏")
-	rows := []string{
-		sectionTitleStyle.Render("Send raw file"),
-		"",
-		fitLine(inputBarStyle.Render(input), width-4),
-		"",
-		footerStyle.Render("Enter send  •  Esc cancel"),
 	}
 	return paletteStyle.Width(width).Render(strings.Join(rows, "\n"))
 }

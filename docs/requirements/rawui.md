@@ -40,7 +40,6 @@ RawUI 通过 [Middleware](middleware.md) 使用 [Backend](backend.md)，不直�
 | 按键 | 行为 |
 |---|---|
 | `Ctrl-P h` | 显示本地帮助 |
-| `Ctrl-P u` | raw 文件发送 |
 | `Ctrl-P Ctrl-U` | YMODEM 上传 |
 | `Ctrl-P Ctrl-D` | YMODEM 下载 |
 | `Ctrl-P q` | 退出会话 |
@@ -58,15 +57,6 @@ RawUI 通过 [Middleware](middleware.md) 使用 [Backend](backend.md)，不直�
 - 用户可以正常编辑路径；空路径或 Esc 取消并返回终端透传。
 - 路径无效、文件不存在或不是普通文件时，显示错误并保持会话可用。
 - 路径输入期间普通字符不得发送给设备。
-
-### Raw file send
-
-- `Ctrl-P u` 启动 raw 文件发送。
-- 发送期间 Middleware 独占 outbound，用户普通键盘输入不与文件字节交错。
-- 设备接收数据仍继续显示在 stdout。
-- stderr 使用单行进度展示已发送字节和总大小。
-- Esc 取消；取消后恢复普通透传。
-- 完成结果明确说明成功、失败或取消。raw send 不暗示校验、重传或断点续传。
 
 ### YMODEM
 

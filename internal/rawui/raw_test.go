@@ -37,7 +37,6 @@ type fakeEndpoint struct {
 	cancel         context.CancelFunc
 	mu             sync.Mutex
 	sent           bytes.Buffer
-	rawUpload      string
 	ymodemUpload   string
 	ymodemDownload string
 	activeTransfer string
@@ -54,11 +53,6 @@ func (e *fakeEndpoint) Send(_ context.Context, data []byte) error {
 		return e.sendErr
 	}
 	_, _ = e.sent.Write(data)
-	return nil
-}
-func (e *fakeEndpoint) StartUpload(_ context.Context, path string) error {
-	e.rawUpload = path
-	e.activeTransfer = "raw"
 	return nil
 }
 func (e *fakeEndpoint) StartYMODEMUpload(_ context.Context, path string) error {
@@ -80,8 +74,6 @@ func (e *fakeEndpoint) StartYMODEMDownload(_ context.Context, dir string) error 
 func (e *fakeEndpoint) CancelTransfer() {
 	e.canceled++
 	switch e.activeTransfer {
-	case "raw":
-		e.events <- session.UploadFinished{Err: context.Canceled}
 	case "ymodem":
 		e.events <- session.YMODEMFinished{Direction: "upload", Err: context.Canceled}
 	case "ymodem-download":
@@ -259,7 +251,6 @@ func TestRawFrontendEscapesFilePathPrompts(t *testing.T) {
 	frontend := New(Config{
 		Terminal: &fakeTerminal{},
 		Input: bytes.NewReader([]byte{
-			DefaultPrefixKey, 'u', 0x1b, 'r',
 			DefaultPrefixKey, 0x15, 0x1b, 'y',
 			DefaultPrefixKey, 'q',
 		}),
@@ -270,11 +261,11 @@ func TestRawFrontendEscapesFilePathPrompts(t *testing.T) {
 	if err := frontend.Run(ctx, endpoint); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if endpoint.rawUpload != "" || endpoint.ymodemUpload != "" {
-		t.Fatalf("uploads started: raw=%q YMODEM=%q", endpoint.rawUpload, endpoint.ymodemUpload)
+	if endpoint.ymodemUpload != "" {
+		t.Fatalf("upload started: YMODEM=%q", endpoint.ymodemUpload)
 	}
-	if got := endpoint.sent.String(); got != "ry" {
-		t.Fatalf("serial output = %q, want %q", got, "ry")
+	if got := endpoint.sent.String(); got != "y" {
+		t.Fatalf("serial output = %q, want %q", got, "y")
 	}
 }
 
@@ -284,7 +275,6 @@ func TestRawFrontendEscCancelsActiveTransfers(t *testing.T) {
 	frontend := New(Config{
 		Terminal: &fakeTerminal{},
 		Input: bytes.NewReader([]byte{
-			DefaultPrefixKey, 'u', 'r', 'a', 'w', '.', 'b', 'i', 'n', '\r', 0x1b,
 			DefaultPrefixKey, 0x15, 'f', 'w', '.', 'b', 'i', 'n', '\r', 0x1b,
 			DefaultPrefixKey, 0x04, 0x1b,
 			DefaultPrefixKey, 'q',
@@ -296,8 +286,8 @@ func TestRawFrontendEscCancelsActiveTransfers(t *testing.T) {
 	if err := frontend.Run(ctx, endpoint); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if endpoint.canceled != 3 {
-		t.Fatalf("CancelTransfer() calls = %d, want 3", endpoint.canceled)
+	if endpoint.canceled != 2 {
+		t.Fatalf("CancelTransfer() calls = %d, want 2", endpoint.canceled)
 	}
 }
 
@@ -329,29 +319,6 @@ func TestRawFrontendHidesDeviceBytesDuringYMODEMFileSelection(t *testing.T) {
 	}
 	if got := output.String(); got != "" {
 		t.Fatalf("device output during YMODEM file selection = %q", got)
-	}
-}
-
-func TestRawFrontendEndsProgressBeforeCompletion(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	endpoint := &fakeEndpoint{events: make(chan session.Event, 2), cancel: cancel}
-	endpoint.events <- session.UploadProgress{Written: 2048, Total: 2672}
-	endpoint.events <- session.UploadFinished{Bytes: 2672}
-	close(endpoint.events)
-	input, inputWriter, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer input.Close()
-	defer inputWriter.Close()
-	var local bytes.Buffer
-	frontend := New(Config{Terminal: &fakeTerminal{}, Input: input, Output: &bytes.Buffer{}, Local: &local})
-	if err := frontend.Run(ctx, endpoint); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if got := local.String(); !bytes.Contains([]byte(got), []byte("2048/2672 bytes\r\nUploaded 2672 bytes\r\n")) {
-		t.Fatalf("progress and completion share one line: %q", got)
 	}
 }
 

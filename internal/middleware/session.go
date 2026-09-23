@@ -60,27 +60,6 @@ type Reconnecting struct {
 
 func (Reconnecting) isSessionEvent() {}
 
-type UploadStarted struct {
-	Path string
-}
-
-func (UploadStarted) isSessionEvent() {}
-
-type UploadProgress struct {
-	Path           string
-	Written, Total int64
-}
-
-func (UploadProgress) isSessionEvent() {}
-
-type UploadFinished struct {
-	Path  string
-	Bytes int64
-	Err   error
-}
-
-func (UploadFinished) isSessionEvent() {}
-
 type YMODEMProgress struct {
 	Direction      string
 	Path           string
@@ -123,7 +102,6 @@ func (YMODEMFinished) isSessionEvent() {}
 type Endpoint interface {
 	Events() <-chan Event
 	Send(context.Context, []byte) error
-	StartUpload(context.Context, string) error
 	StartYMODEMUpload(context.Context, string) error
 	StartYMODEMDownload(context.Context, string) error
 	CancelTransfer()
@@ -163,14 +141,13 @@ type endpoint struct {
 	pipeline       *Pipeline
 	openConnection func(ConnectionConfig) (SerialPort, error)
 
-	mu                    sync.Mutex
-	stopping              bool
-	transferActive        bool
-	transferConsumesInput bool
-	transferCancel        context.CancelFunc
-	transferInput         chan []byte
-	transferHandlerName   string
-	workers               sync.WaitGroup
+	mu                  sync.Mutex
+	stopping            bool
+	transferActive      bool
+	transferCancel      context.CancelFunc
+	transferInput       chan []byte
+	transferHandlerName string
+	workers             sync.WaitGroup
 }
 
 func (e *endpoint) Events() <-chan Event {
@@ -181,23 +158,16 @@ func (e *endpoint) Events() <-chan Event {
 func (e *endpoint) markReady() { e.readyOnce.Do(func() { close(e.ready) }) }
 
 type transferGate struct {
-	name   string
-	duplex bool
-	input  chan<- []byte
-	done   <-chan struct{}
+	name  string
+	input chan<- []byte
+	done  <-chan struct{}
 }
 
 func (g *transferGate) Name() string { return g.name }
 func (g *transferGate) Capability() Capability {
-	if g.duplex {
-		return ExclusiveDuplex
-	}
-	return ExclusiveOutbound
+	return ExclusiveDuplex
 }
 func (g *transferGate) HandleInbound(ctx context.Context, envelope Envelope) (Action, error) {
-	if !g.duplex {
-		return Forward(envelope), nil
-	}
 	select {
 	case g.input <- append([]byte(nil), envelope.Data...):
 		return Consume(), nil
@@ -264,25 +234,19 @@ func (e *endpoint) writeFrom(ctx context.Context, source string, data []byte) er
 	}
 }
 
-func (e *endpoint) StartUpload(ctx context.Context, path string) error {
-	return e.startTransfer(ctx, false, func(transferCtx context.Context) {
-		e.runUpload(transferCtx, path)
-	})
-}
-
 func (e *endpoint) StartYMODEMUpload(ctx context.Context, path string) error {
-	return e.startTransfer(ctx, true, func(transferCtx context.Context) {
+	return e.startTransfer(ctx, func(transferCtx context.Context) {
 		e.runYMODEMUpload(transferCtx, path)
 	})
 }
 
 func (e *endpoint) StartYMODEMDownload(ctx context.Context, dir string) error {
-	return e.startTransfer(ctx, true, func(transferCtx context.Context) {
+	return e.startTransfer(ctx, func(transferCtx context.Context) {
 		e.runYMODEMDownload(transferCtx, dir)
 	})
 }
 
-func (e *endpoint) startTransfer(ctx context.Context, consumesInput bool, run func(context.Context)) error {
+func (e *endpoint) startTransfer(ctx context.Context, run func(context.Context)) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -297,16 +261,12 @@ func (e *endpoint) startTransfer(ctx context.Context, consumesInput bool, run fu
 	}
 	transferCtx, cancel := context.WithCancel(e.ctx)
 	e.transferActive = true
-	e.transferConsumesInput = consumesInput
 	e.transferCancel = cancel
-	if consumesInput {
-		e.transferInput = make(chan []byte, 32)
-	}
-	gate := &transferGate{name: "transfer.active", duplex: consumesInput, input: e.transferInput, done: transferCtx.Done()}
+	e.transferInput = make(chan []byte, 32)
+	gate := &transferGate{name: "transfer.active", input: e.transferInput, done: transferCtx.Done()}
 	if err := e.pipeline.Add(ctx, gate); err != nil {
 		cancel()
 		e.transferActive = false
-		e.transferConsumesInput = false
 		e.transferCancel = nil
 		e.transferInput = nil
 		e.mu.Unlock()
@@ -322,27 +282,6 @@ func (e *endpoint) startTransfer(ctx context.Context, consumesInput bool, run fu
 		run(transferCtx)
 	}()
 	return nil
-}
-
-func (e *endpoint) runUpload(ctx context.Context, path string) {
-	e.emit(UploadStarted{Path: path})
-
-	lastProgress := time.Time{}
-	n, err := transfer.UploadRawFile(ctx, path, writerFunc(e.writeTransfer), func(written, total int64) {
-		now := time.Now()
-		if written != total && now.Sub(lastProgress) < 100*time.Millisecond {
-			return
-		}
-		lastProgress = now
-		e.emit(UploadProgress{Path: path, Written: written, Total: total})
-	})
-	if errors.Is(err, context.Canceled) {
-		err = context.Canceled
-	}
-
-	e.finishTransfer()
-
-	e.emit(UploadFinished{Path: path, Bytes: n, Err: err})
 }
 
 func (e *endpoint) runYMODEMUpload(ctx context.Context, path string) {
@@ -406,7 +345,6 @@ func (e *endpoint) finishTransfer() {
 	e.mu.Lock()
 	handlerName := e.transferHandlerName
 	e.transferActive = false
-	e.transferConsumesInput = false
 	e.transferCancel = nil
 	e.transferInput = nil
 	e.transferHandlerName = ""
@@ -414,15 +352,6 @@ func (e *endpoint) finishTransfer() {
 	if handlerName != "" {
 		_ = e.pipeline.Remove(context.Background(), handlerName)
 	}
-}
-
-type writerFunc func(context.Context, []byte) error
-
-func (f writerFunc) Write(data []byte) (int, error) {
-	if err := f(context.Background(), data); err != nil {
-		return 0, err
-	}
-	return len(data), nil
 }
 
 type transferStream struct {

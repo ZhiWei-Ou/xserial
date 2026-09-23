@@ -53,6 +53,8 @@ type YMODEMRetry struct {
 
 type YMODEMRetryFunc func(YMODEMRetry)
 
+type ProgressFunc func(written, total int64)
+
 func SendYMODEMFile(ctx context.Context, path string, conn io.ReadWriter, progress ProgressFunc, retry YMODEMRetryFunc) (stats YMODEMStats, err error) {
 	info, err := os.Stat(path)
 	if err != nil {

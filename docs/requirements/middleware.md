@@ -73,7 +73,7 @@ Handler 声明自己对串口方向的占用方式：
 |---|---|---|---|
 | Passive | 继续传播 | 继续传播 | 统计、未来的记录 |
 | Inbound consume | 消费 | 继续传播 | 接收侧解析或触发器 |
-| Outbound exclusive | 继续传播 | 独占 | raw 文件发送 |
+| Outbound exclusive | 继续传播 | 独占 | 单向发送独占 |
 | Duplex exclusive | 独占 | 独占 | YMODEM 等双向协议 |
 
 - 同一方向同时只能存在一个 exclusive Handler。
@@ -83,14 +83,6 @@ Handler 声明自己对串口方向的占用方式：
 - 独占 Handler 完成、取消、失败或断线后必须释放占用并从 Pipeline 移除。
 
 ## 文件传输能力
-
-### Raw file send
-
-- 作为 outbound-exclusive Handler 实现。
-- 分块读取普通文件并通过 Pipeline 发送原始字节。
-- 接收方向保持可用，不阻断设备输出。
-- 产生 started、progress 和 finished 事件。
-- 支持取消；不承诺校验、重传或断点续传。
 
 ### YMODEM
 
@@ -131,7 +123,6 @@ Handler 声明自己对串口方向的占用方式：
 - Transform Handler 修改字节后，下游只收到修改后的 Envelope。
 - Consume Handler 阻止当前 Envelope 继续传播，且行为可观察。
 - 多个 Handler 的 inbound/outbound 顺序与定义一致。
-- raw file send 独占 outbound 时，普通发送返回 busy，RX 仍到达前端。
 - YMODEM 独占双向时，协议字节不泄漏到 rawui 或 tui。
 - 取消、Handler 错误和设备断线都会移除临时 Handler，并恢复或结束到确定状态。
 - Handler 动态增删与高频数据同时发生时不存在竞态、乱序或遗留 goroutine。

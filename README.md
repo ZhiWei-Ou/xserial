@@ -16,7 +16,7 @@ xserial keeps the common path short: list a port, connect to it, and start typin
 - Serial port discovery on Linux, macOS, and Windows
 - Byte-transparent RawUI with local commands on `stderr`
 - Full-screen TUI with terminal rendering, connection status, statistics, and editable serial settings
-- Raw file upload and single-file YMODEM transfer
+- Single-file YMODEM transfer
 - Receive logging, optional line timestamps, and automatic background reconnection
 - Shell completion for Bash, Zsh, Fish, and PowerShell
 

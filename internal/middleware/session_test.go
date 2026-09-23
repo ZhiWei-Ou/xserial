@@ -274,24 +274,23 @@ func TestSessionQuitCancelsReconnectWait(t *testing.T) {
 	}
 }
 
-func TestUploadExcludesNormalWritesAndFinishesBeforeRunReturns(t *testing.T) {
+func TestYMODEMUploadExcludesNormalWritesAndCancelsBeforeRunReturns(t *testing.T) {
 	file := t.TempDir() + "/firmware.bin"
 	if err := os.WriteFile(file, bytes.Repeat([]byte{0xaa}, 512), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	port := newGatedPort()
-	var finished UploadFinished
+	port := newBlockingPort()
+	var finished YMODEMFinished
 	frontend := frontendFunc(func(ctx context.Context, endpoint Endpoint) error {
-		if err := endpoint.StartUpload(ctx, file); err != nil {
+		if err := endpoint.StartYMODEMUpload(ctx, file); err != nil {
 			return err
 		}
-		<-port.writeStarted
 		if err := endpoint.Send(ctx, []byte("user input")); !errors.Is(err, ErrTransferActive) {
 			return errors.New("normal write was not rejected during upload")
 		}
-		close(port.allowWrite)
+		endpoint.CancelTransfer()
 		for event := range endpoint.Events() {
-			if event, ok := event.(UploadFinished); ok {
+			if event, ok := event.(YMODEMFinished); ok {
 				finished = event
 				endpoint.Quit()
 				return nil
@@ -303,11 +302,8 @@ func TestUploadExcludesNormalWritesAndFinishesBeforeRunReturns(t *testing.T) {
 	if err := New(Config{Port: port, Frontend: frontend}).Run(context.Background()); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if finished.Err != nil || finished.Bytes != 512 {
+	if !errors.Is(finished.Err, context.Canceled) {
 		t.Fatalf("upload finished = %#v", finished)
-	}
-	if port.concurrentWrite {
-		t.Fatal("serial port observed concurrent writes")
 	}
 }
 
@@ -368,40 +364,6 @@ func (p ymodemTestPort) Read(data []byte) (int, error) {
 	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
 		err = io.EOF
 	}
-	return n, err
-}
-
-type gatedPort struct {
-	*fakePort
-	writeStarted    chan struct{}
-	allowWrite      chan struct{}
-	startOnce       sync.Once
-	writeMu         sync.Mutex
-	writing         bool
-	concurrentWrite bool
-}
-
-func newGatedPort() *gatedPort {
-	return &gatedPort{
-		fakePort:     newBlockingPort(),
-		writeStarted: make(chan struct{}),
-		allowWrite:   make(chan struct{}),
-	}
-}
-
-func (p *gatedPort) Write(data []byte) (int, error) {
-	p.writeMu.Lock()
-	if p.writing {
-		p.concurrentWrite = true
-	}
-	p.writing = true
-	p.writeMu.Unlock()
-	p.startOnce.Do(func() { close(p.writeStarted) })
-	<-p.allowWrite
-	n, err := p.fakePort.Write(data)
-	p.writeMu.Lock()
-	p.writing = false
-	p.writeMu.Unlock()
 	return n, err
 }
 

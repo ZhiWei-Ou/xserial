@@ -16,7 +16,6 @@ import (
 type fakeEndpoint struct {
 	events         chan middleware.Event
 	sent           [][]byte
-	upload         string
 	ymodemUpload   string
 	ymodemDownload string
 	canceled       bool
@@ -30,10 +29,6 @@ func newFakeEndpoint() *fakeEndpoint                    { return &fakeEndpoint{e
 func (e *fakeEndpoint) Events() <-chan middleware.Event { return e.events }
 func (e *fakeEndpoint) Send(_ context.Context, data []byte) error {
 	e.sent = append(e.sent, append([]byte(nil), data...))
-	return e.err
-}
-func (e *fakeEndpoint) StartUpload(_ context.Context, path string) error {
-	e.upload = path
 	return e.err
 }
 func (e *fakeEndpoint) StartYMODEMUpload(_ context.Context, path string) error {
@@ -191,10 +186,11 @@ func TestCommandPaletteInvokesRegisteredActions(t *testing.T) {
 	if !m.palette {
 		t.Fatal("palette did not open")
 	}
+	m.appendTerminalData([]byte("old output"))
 	m.paletteIndex = 0
 	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	if m.pathMode != transferRawUpload {
-		t.Fatal("upload command did not enter path mode")
+	if m.palette || strings.Contains(strings.Join(m.lines, ""), "old output") {
+		t.Fatal("clear terminal command did not clear output and close palette")
 	}
 }
 
@@ -271,7 +267,7 @@ func TestConfigurationApplyReturnsToConfigurationFocus(t *testing.T) {
 	}
 }
 
-func TestQClosesSelectionPopupsButRemainsValidPathInput(t *testing.T) {
+func TestQClosesSelectionPopups(t *testing.T) {
 	m := newModel(newFakeEndpoint(), Config{PortName: "/dev/test0", Baud: 115200, Frame: "8,N,1"})
 	m.palette = true
 	m.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
@@ -288,12 +284,6 @@ func TestQClosesSelectionPopupsButRemainsValidPathInput(t *testing.T) {
 	if m.status != "Ready" {
 		t.Fatalf("status after closing configuration = %q, want Ready", m.status)
 	}
-
-	m.pathMode = transferRawUpload
-	m.Update(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
-	if m.pathMode != transferRawUpload || string(m.input) != "q" {
-		t.Fatalf("path mode = %v, input = %q", m.pathMode, string(m.input))
-	}
 }
 
 func TestDoublePrefixSendsLiteralCtrlP(t *testing.T) {
@@ -307,17 +297,6 @@ func TestDoublePrefixSendsLiteralCtrlP(t *testing.T) {
 	m.Update(command())
 	if len(endpoint.sent) != 1 || !bytes.Equal(endpoint.sent[0], []byte{0x10}) {
 		t.Fatalf("double prefix sent %q", endpoint.sent)
-	}
-}
-
-func TestTUIEscCancelsRawTransfer(t *testing.T) {
-	endpoint := newFakeEndpoint()
-	m := newModel(endpoint, Config{})
-	m.transferring, m.transferMode = true, transferRawUpload
-
-	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
-	if !endpoint.canceled || !strings.Contains(m.status, "Canceling") {
-		t.Fatalf("canceled=%v status=%q", endpoint.canceled, m.status)
 	}
 }
 

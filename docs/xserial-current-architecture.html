@@ -271,7 +271,7 @@
         <div class="xsa-nodes">
           <div class="xsa-node" data-tone="4"><code>internal/rawui</code><span>raw mode · Ctrl-P · stdin / stdout / stderr</span></div>
           <div class="xsa-node" data-tone="4"><code>internal/tui</code><span>Bubble Tea · 智能 Hex · TX / RX 时间线</span></div>
-          <div class="xsa-node" data-tone="5"><code>internal/transfer</code><span>raw upload · YMODEM · WriteFull</span></div>
+          <div class="xsa-node" data-tone="5"><code>internal/transfer</code><span>YMODEM · WriteFull</span></div>
           <div class="xsa-node" data-tone="5"><code>internal/serialport</code><span>List / Open · 平台详情隔离</span></div>
           <div class="xsa-node" data-tone="5"><code>internal/logging</code><span>结构化业务日志 · stderr</span></div>
         </div>
@@ -329,7 +329,7 @@
     </div>
     <div class="xsa-flow-note">
       <div><strong>可控展示</strong><span>raw 默认保持 stdout 字节透明；启用 --time 后仅为接收行增加时间前缀，本地提示仍只走 stderr。</span></div>
-      <div><strong>方向独占</strong><span>raw upload 独占 outbound；YMODEM 独占 duplex，避免串口字节交错。</span></div>
+      <div><strong>方向独占</strong><span>YMODEM 独占 duplex，避免串口字节交错。</span></div>
       <div><strong>可扩展处理</strong><span>Handler 可观察、变换或消费 Envelope，为过滤与重渲染保留 seam。</span></div>
     </div>
   </section>
