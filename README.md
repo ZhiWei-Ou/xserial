@@ -160,7 +160,7 @@ Framing rules include `chunk`, `fixed:N`, `delimiter:HEX`, `length:OFFSET:WIDTH:
 - [Recording format, replay, and export](docs/capture.md)
 - [Protocol examples and sample recording](examples/modbus/README.md)
 
-Most detailed guides currently use Chinese.
+The guides above are written in English.
 
 ## Contributing
 

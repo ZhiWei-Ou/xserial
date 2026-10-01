@@ -160,7 +160,7 @@ xserial /dev/ttyUSB0 9600,8,E,1 --workbench --frame fixed:9
 - [录制格式、回放与导出](docs/capture.md)
 - [协议示例与录制样本](examples/modbus/README.md)
 
-详细指南目前以中文为主。
+以上详细指南使用英文。
 
 ## 参与贡献
 
