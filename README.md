@@ -5,19 +5,21 @@
 <h1 align="center">xserial</h1>
 
 <p align="center">
-  A terminal workbench for serial communication and binary protocol debugging.
+  <strong>An AI-powered serial terminal.</strong><br>
+  Connect Codex and other coding agents to your devices through MCP.
 </p>
 
 <p align="center">
   <!-- Update assets/version-badge.svg and its alt text when creating a new version tag. -->
-  <a href="https://github.com/ZhiWei-Ou/xserial/tags"><img src="assets/version-badge.svg" alt="Version v0.1.0"></a>
+  <a href="https://github.com/ZhiWei-Ou/xserial/releases/latest"><img src="assets/version-badge.svg" alt="Version v0.1.0"></a>
   <a href="https://github.com/ZhiWei-Ou/xserial/actions/workflows/ci.yml"><img src="https://github.com/ZhiWei-Ou/xserial/actions/workflows/ci.yml/badge.svg" alt="Build status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
 </p>
 
 <p align="center">
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#connect-a-coding-agent-via-mcp">MCP</a> ·
   <a href="#documentation">Documentation</a> ·
-  <a href="#quick-start">Try the demo</a> ·
   <a href="https://github.com/ZhiWei-Ou/xserial/issues">Report an issue</a>
 </p>
 
@@ -26,20 +28,21 @@
 </p>
 
 <p align="center">
-  <strong>Demo (42 seconds)</strong> — RawUI, the full-screen console, and Hexdump.
+  <strong>Codex + xserial MCP</strong><br>
+  Watch Codex operate a device through its serial connection.
 </p>
 
-https://github.com/user-attachments/assets/91dca830-0c6a-41ba-96f0-97ad97430697
+https://github.com/user-attachments/assets/0abb2e41-440a-4888-a991-1f1b4079d223
 
 ## Features
 
+- **Connect AI agents to devices.** Let Codex and other coding agents read serial output and send text, Hex, or base64 data through MCP. Supports Streamable HTTP and stdio, with cursor-based reads.
+- **Work in your terminal.** Use byte-transparent RawUI or the full-screen terminal UI, with automatic reconnection, receive logging, timestamps, and single-file YMODEM transfer. Supports Linux, macOS, and Windows.
 - **Send and inspect bytes.** Edit validated Hex input and compare TX/RX with timestamps, lengths, Hex, and ASCII. Reuse sending history and named command favorites.
 - **Understand binary fields.** Select bytes to inspect integers and floating-point values in both byte orders. Preview, append, and verify CRC16 Modbus, SUM8, and XOR8 checksums.
 - **Reassemble responses.** Choose fixed-length, delimiter, length-field, or Modbus register-response framing to handle split and joined reads.
 - **Debug offline.** Record original RX/TX bytes and connection events, then replay, search, mark, and export a conversation after the device is disconnected.
-- **Let coding agents debug devices.** MCP tools attach to running serial terminals for exact-byte sending and bounded reads with continuation cursors. One local HTTP daemon discovers sessions; terminal connections and history survive MCP restarts.
 - **Try it without hardware.** The built-in simulated device demonstrates normal responses, bad CRCs, split responses, and joined responses through the same workbench.
-- **Keep a classic serial terminal.** Use byte-transparent RawUI or the full-screen terminal UI, with automatic reconnection, receive logging, timestamps, and single-file YMODEM transfer. Supports Linux, macOS, and Windows.
 
 ## Quick Start
 
@@ -53,11 +56,33 @@ go run ./cmd/xserial demo --frame modbus-read
 
 Press **Enter** to query two simulated registers. Press **Tab** to inspect the response, or **Ctrl-C** to quit. For a non-interactive preview, run `go run ./cmd/xserial demo --snapshot`.
 
-The workbench changes have not been published as a release yet. Use the current source checkout to try them. Prebuilt binaries will be available on the [Releases page](https://github.com/ZhiWei-Ou/xserial/releases) after publication.
+Prebuilt binaries for Linux, macOS, and Windows (amd64 and arm64) are available on the [Releases page](https://github.com/ZhiWei-Ou/xserial/releases). MCP support is currently available from source and is not included in v0.1.0; use the current checkout for the AI features shown above.
 
 To build a local executable, run `make build`; it writes the binary to `bin/`. The examples below assume `xserial` is on your `PATH`. You can also replace `xserial` with `go run ./cmd/xserial` from the repository root.
 
 ## Usage
+
+### Connect a coding agent via MCP
+
+Open a serial terminal and start MCP in a second terminal:
+
+```bash
+# Terminal 1: connect to your device
+xserial /dev/ttyUSB0 115200
+
+# Terminal 2: start the MCP server
+xserial mcp
+```
+
+Add `http://127.0.0.1:8765/mcp` to your coding agent's MCP configuration. The agent can then use these tools:
+
+| Tool | Purpose |
+| --- | --- |
+| `serial_status` | Find connected sessions and their serial settings |
+| `serial_read` | Read device output and continue from a receive cursor |
+| `serial_send` | Send exact text, Hex, or base64 bytes |
+
+Your terminal owns the serial connection and receive history; restarting MCP preserves both while the terminal stays running. For clients that launch a subprocess, use `xserial mcp --transport stdio`. See the [MCP guide](docs/mcp.md) for client configuration, the send/read workflow, and hardware-free demo sessions.
 
 ### Connect to a device console
 
@@ -82,6 +107,12 @@ This terminal UI is Beta. Press `Ctrl-P` for commands, `Ctrl-P c` to focus confi
 <p align="center">
   <img src="assets/xserial-workbench.png" width="960" alt="xserial full-screen device console with a serial configuration sidebar">
 </p>
+
+<p align="center">
+  <strong>Terminal demo (42 seconds)</strong> — RawUI, the full-screen console, and Hexdump.
+</p>
+
+https://github.com/user-attachments/assets/91dca830-0c6a-41ba-96f0-97ad97430697
 
 ### Debug a binary protocol
 

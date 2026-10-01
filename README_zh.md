@@ -5,19 +5,21 @@
 <h1 align="center">xserial</h1>
 
 <p align="center">
-  终端里的串口通信与二进制协议调试工作台。
+  <strong>AI 驱动的终端串口工具。</strong><br>
+  通过 MCP，让 Codex 等 coding agent 连接并操作你的设备。
 </p>
 
 <p align="center">
   <!-- 创建新版本标签时同步更新 assets/version-badge.svg 及其替代文本。 -->
-  <a href="https://github.com/ZhiWei-Ou/xserial/tags"><img src="assets/version-badge.svg" alt="版本 v0.1.0"></a>
+  <a href="https://github.com/ZhiWei-Ou/xserial/releases/latest"><img src="assets/version-badge.svg" alt="版本 v0.1.0"></a>
   <a href="https://github.com/ZhiWei-Ou/xserial/actions/workflows/ci.yml"><img src="https://github.com/ZhiWei-Ou/xserial/actions/workflows/ci.yml/badge.svg" alt="构建状态"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT 许可证"></a>
 </p>
 
 <p align="center">
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#通过-mcp-连接-coding-agent">MCP</a> ·
   <a href="#文档">文档</a> ·
-  <a href="#快速开始">体验 Demo</a> ·
   <a href="https://github.com/ZhiWei-Ou/xserial/issues">问题反馈</a>
 </p>
 
@@ -26,21 +28,21 @@
 </p>
 
 <p align="center">
-  <strong>演示（42 秒）</strong>：RawUI、全屏控制台与 Hexdump。
+  <strong>Codex + xserial MCP</strong><br>
+  观看 Codex 通过串口连接操作设备。
 </p>
 
-https://github.com/user-attachments/assets/91dca830-0c6a-41ba-96f0-97ad97430697
+https://github.com/user-attachments/assets/0abb2e41-440a-4888-a991-1f1b4079d223
 
 ## 核心功能
 
-- **让 coding agent 调试设备。** MCP 接入正在运行的串口终端，提供精确字节发送和带游标的有限等待读取；本地唯一 HTTP daemon 发现会话，终端连接与历史在 MCP 重启后仍然保留。
-
+- **让 AI 操作设备。** Codex 等 coding agent 通过 MCP 读取串口输出，发送文本、Hex 或 base64 数据；支持 Streamable HTTP、stdio 和基于游标的读取。
+- **直接在终端里工作。** 提供字节透明的 RawUI 与全屏终端 UI，支持自动重连、接收日志、时间戳和单文件 YMODEM 传输，覆盖 Linux、macOS、Windows。
 - **发送与观察字节。** 编辑经过校验的 Hex 输入，对照带时间、长度、Hex 和 ASCII 的 TX/RX，复用发送历史与命令收藏。
 - **理解二进制字段。** 选中字节，查看大小端整数与浮点数；预览、追加和检查 CRC16 Modbus、SUM8、XOR8 校验。
 - **重组响应。** 显式选择固定长度、分隔符、长度字段或 Modbus 寄存器响应分帧，处理半帧与粘连。
 - **离线复查通信。** 保存原始 RX/TX 与连接事件，设备断开后继续回放、搜索、标记和导出。
 - **无需硬件即可体验。** 内置模拟设备通过同一个工作台演示正常响应、坏 CRC、分段响应和粘连响应。
-- **保留常用串口终端能力。** 提供字节透明的 RawUI 与全屏终端 UI，支持自动重连、接收日志、时间戳和单文件 YMODEM 传输，覆盖 Linux、macOS、Windows。
 
 ## 快速开始
 
@@ -54,11 +56,33 @@ go run ./cmd/xserial demo --frame modbus-read
 
 按 **Enter** 查询两个模拟寄存器，按 **Tab** 检查响应，按 **Ctrl-C** 退出。无需交互终端的预览可使用 `go run ./cmd/xserial demo --snapshot`。
 
-工作台改动尚未公开发布，请使用当前源码体验。发布后可从 [Releases 页面](https://github.com/ZhiWei-Ou/xserial/releases) 下载预编译包。
+可从 [Releases 页面](https://github.com/ZhiWei-Ou/xserial/releases) 下载 Linux、macOS、Windows 的 amd64 与 arm64 预编译包。MCP 目前需要从源码运行，v0.1.0 尚未包含该功能；体验上方视频中的 AI 能力，请使用当前源码。
 
 运行 `make build` 可将本地可执行文件构建到 `bin/`。后续示例假设 `xserial` 已加入 `PATH`；在仓库根目录中，也可以将 `xserial` 替换为 `go run ./cmd/xserial`。
 
 ## 使用方法
+
+### 通过 MCP 连接 coding agent
+
+打开串口终端，然后在另一个终端启动 MCP：
+
+```bash
+# 终端 1：连接设备
+xserial /dev/ttyUSB0 115200
+
+# 终端 2：启动 MCP server
+xserial mcp
+```
+
+将 `http://127.0.0.1:8765/mcp` 加入 coding agent 的 MCP 配置，即可使用以下工具：
+
+| 工具 | 用途 |
+| --- | --- |
+| `serial_status` | 查找已连接的会话及串口配置 |
+| `serial_read` | 读取设备输出，并通过游标继续读取 |
+| `serial_send` | 发送精确的文本、Hex 或 base64 字节 |
+
+终端程序维护串口连接和接收历史；终端保持运行时，重启 MCP 会保留两者。对于通过子进程连接的客户端，使用 `xserial mcp --transport stdio`。客户端配置、收发流程与无需硬件的 Demo 接入方式见 [MCP 指南](docs/mcp.md)。
 
 ### 连接设备控制台
 
@@ -83,6 +107,12 @@ xserial /dev/ttyUSB0 --TUI
 <p align="center">
   <img src="assets/xserial-workbench.png" width="960" alt="xserial 全屏设备控制台与串口配置侧栏">
 </p>
+
+<p align="center">
+  <strong>终端演示（42 秒）</strong>：RawUI、全屏控制台与 Hexdump。
+</p>
+
+https://github.com/user-attachments/assets/91dca830-0c6a-41ba-96f0-97ad97430697
 
 ### 调试二进制协议
 
