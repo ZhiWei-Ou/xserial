@@ -9,7 +9,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ZhiWei-Ou/xserial/releases"><img src="https://img.shields.io/github/v/release/ZhiWei-Ou/xserial?label=version" alt="最新版本"></a>
+  <!-- 创建新版本标签时同步更新 assets/version-badge.svg 及其替代文本。 -->
+  <a href="https://github.com/ZhiWei-Ou/xserial/tags"><img src="assets/version-badge.svg" alt="版本 v0.1.0"></a>
   <a href="https://github.com/ZhiWei-Ou/xserial/actions/workflows/ci.yml"><img src="https://github.com/ZhiWei-Ou/xserial/actions/workflows/ci.yml/badge.svg" alt="构建状态"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT 许可证"></a>
 </p>

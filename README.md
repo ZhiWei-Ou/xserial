@@ -9,7 +9,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ZhiWei-Ou/xserial/releases"><img src="https://img.shields.io/github/v/release/ZhiWei-Ou/xserial?label=version" alt="Latest release"></a>
+  <!-- Update assets/version-badge.svg and its alt text when creating a new version tag. -->
+  <a href="https://github.com/ZhiWei-Ou/xserial/tags"><img src="assets/version-badge.svg" alt="Version v0.1.0"></a>
   <a href="https://github.com/ZhiWei-Ou/xserial/actions/workflows/ci.yml"><img src="https://github.com/ZhiWei-Ou/xserial/actions/workflows/ci.yml/badge.svg" alt="Build status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
 </p>
