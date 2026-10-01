@@ -75,7 +75,7 @@ xserial mcp
 | `serial_read` | 读取输出，并通过游标继续读取 |
 | `serial_send` | 发送文本、Hex 或 base64 字节 |
 
-MCP 目前位于最新源码中，v0.1.0 尚未包含；配置方式见 [MCP 指南](docs/mcp.md)。
+配置方式见 [MCP 指南](docs/mcp.md)。
 
 ### 常用命令
 

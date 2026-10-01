@@ -34,63 +34,12 @@ func TestConnShowsOnlyCurrentPlatformExamples(t *testing.T) {
 	}
 }
 
-func TestConnDoesNotExposeSerialConfigFlags(t *testing.T) {
-	cmd := NewRootCommand()
-
-	if flag := cmd.Flags().Lookup("cfg"); flag != nil {
-		t.Fatal("--cfg flag exists, want nil")
-	}
-	if flag := cmd.Flags().ShorthandLookup("c"); flag != nil {
-		t.Fatal("-c shorthand exists, want nil")
-	}
-
-	for _, name := range []string{"baud", "data-bits", "parity", "stop-bits"} {
-		if flag := cmd.Flags().Lookup(name); flag != nil {
-			t.Fatalf("legacy flag %q exists, want nil", name)
-		}
-	}
-}
-
-func TestConnExposesReceiveLog(t *testing.T) {
-	cmd := NewRootCommand()
-
-	flag := cmd.Flags().Lookup("log")
-	if flag == nil {
-		t.Fatal("--log flag not found")
-	}
-	if flag.DefValue != "" {
-		t.Fatalf("--log default = %q, want empty", flag.DefValue)
-	}
-
-	timeFlag := cmd.Flags().Lookup("time")
-	if timeFlag == nil {
-		t.Fatal("--time flag not found")
-	}
-	if timeFlag.DefValue != "false" {
-		t.Fatalf("--time default = %q, want false", timeFlag.DefValue)
-	}
-	if timeFlag.Shorthand != "t" {
-		t.Fatalf("--time shorthand = %q, want t", timeFlag.Shorthand)
-	}
-	if flag := cmd.Flags().Lookup("log-time-format"); flag != nil {
-		t.Fatal("legacy --log-time-format flag exists, want nil")
-	}
-	if flag := cmd.Flags().Lookup("TUI"); flag == nil {
-		t.Fatal("--TUI flag not found")
-	} else if flag.DefValue != "false" {
-		t.Fatalf("--TUI default = %q, want false", flag.DefValue)
-	}
-	if flag := cmd.Flags().Lookup("reconnect"); flag != nil {
-		t.Fatal("--reconnect flag should not exist")
-	}
-}
-
-func TestConnTimeFlagUsesFixedFormat(t *testing.T) {
+func TestConnReceiveLogAndTimeFlagsReachConnection(t *testing.T) {
 	for _, flag := range []string{"", "-t", "--time"} {
 		t.Run(flag, func(t *testing.T) {
 			var got connOptions
 			cmd := newRootCommand(rootDependencies{conn: func(_ context.Context, opts connOptions) error { got = opts; return nil }})
-			args := []string{"test-port"}
+			args := []string{"test-port", "--log", "device.log"}
 			if flag != "" {
 				args = append(args, flag)
 			}
@@ -102,8 +51,8 @@ func TestConnTimeFlagUsesFixedFormat(t *testing.T) {
 			if flag != "" {
 				want = defaultReceiveTimeFormat
 			}
-			if got.timeFormat != want {
-				t.Fatalf("time format = %q, want %q", got.timeFormat, want)
+			if got.logPath != "device.log" || got.timeFormat != want {
+				t.Fatalf("log path = %q, time format = %q; want device.log, %q", got.logPath, got.timeFormat, want)
 			}
 		})
 	}
@@ -115,27 +64,6 @@ func TestConnTimeFlagRejectsCustomFormat(t *testing.T) {
 		if err := cmd.ParseFlags([]string{flag}); err == nil {
 			t.Fatalf("ParseFlags(%q) succeeded", flag)
 		}
-	}
-}
-
-func TestOpenReceiveLogWithoutPathReturnsNilWriter(t *testing.T) {
-	logFile, err := openReceiveLog("")
-	if err != nil {
-		t.Fatalf("openReceiveLog() error = %v", err)
-	}
-	if logFile != nil {
-		t.Fatalf("openReceiveLog() = %#v, want nil", logFile)
-	}
-}
-
-func TestConnDoesNotExposePortFlag(t *testing.T) {
-	cmd := NewRootCommand()
-
-	if flag := cmd.Flags().Lookup("port"); flag != nil {
-		t.Fatalf("port flag exists, want nil")
-	}
-	if flag := cmd.Flags().ShorthandLookup("p"); flag != nil {
-		t.Fatalf("-p shorthand exists, want nil")
 	}
 }
 

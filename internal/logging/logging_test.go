@@ -2,31 +2,23 @@ package logging
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
-type recordingFormatter struct {
-	entries []Entry
-}
-
-func (f *recordingFormatter) Format(entry Entry) []byte {
-	f.entries = append(f.entries, entry)
-	return []byte("formatted")
-}
-
-func TestLevelFilteringAndRawOutputUseSeparatePaths(t *testing.T) {
+func TestLoggerFormatsEventsAndPreservesRawLocalOutput(t *testing.T) {
 	var output bytes.Buffer
-	formatter := &recordingFormatter{}
-	logger := New(&output, WithLevel(WarnLevel), WithFormatter(formatter))
-
-	logger.Info("filtered")
-	logger.Warn("formatted")
-	_, _ = logger.Raw([]byte("raw"))
-
-	if len(formatter.entries) != 1 || formatter.entries[0].Level != WarnLevel {
-		t.Fatalf("formatted entries = %#v", formatter.entries)
+	logger := New(&output)
+	logger.Warn("session.warning", "detail", "first\nsecond")
+	logger.Error("session.failed", "error", "device disconnected")
+	raw := []byte("\r\x1b[2Kprogress")
+	if n, err := logger.Write(raw); err != nil || n != len(raw) {
+		t.Fatalf("Write() = %d, %v", n, err)
 	}
-	if got := output.String(); got != "formattedraw" {
+	got := output.String()
+	if !strings.Contains(got, "[WARN] session.warning detail=\"first\\nsecond\"\r\n") ||
+		!strings.Contains(got, "[ERROR] session.failed error=\"device disconnected\"\r\n") ||
+		strings.Count(got, "\n") != 2 || !bytes.HasSuffix(output.Bytes(), raw) {
 		t.Fatalf("output = %q", got)
 	}
 }

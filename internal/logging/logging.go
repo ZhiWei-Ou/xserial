@@ -16,28 +16,19 @@ import (
 type Level uint8
 
 const (
-	TraceLevel Level = iota
-	DebugLevel
-	InfoLevel
+	InfoLevel Level = iota
 	WarnLevel
 	ErrorLevel
-	PanicLevel
 )
 
 func (l Level) String() string {
 	switch l {
-	case TraceLevel:
-		return "TRACE"
-	case DebugLevel:
-		return "DEBUG"
 	case InfoLevel:
 		return "INFO"
 	case WarnLevel:
 		return "WARN"
 	case ErrorLevel:
 		return "ERROR"
-	case PanicLevel:
-		return "PANIC"
 	default:
 		return "UNKNOWN"
 	}
@@ -48,10 +39,6 @@ type Entry struct {
 	Level   Level
 	Message string
 	Fields  []any
-}
-
-type Formatter interface {
-	Format(Entry) []byte
 }
 
 type TextFormatter struct {
@@ -94,53 +81,19 @@ func (f TextFormatter) Format(entry Entry) []byte {
 	return line.Bytes()
 }
 
-type Option func(*Logger)
-
-func WithLevel(level Level) Option {
-	return func(logger *Logger) {
-		logger.level = level
-	}
-}
-
-func WithFormatter(formatter Formatter) Option {
-	return func(logger *Logger) {
-		if formatter != nil {
-			logger.formatter = formatter
-		}
-	}
-}
-
 // Logger writes application logs and unformatted local output. A nil *Logger
 // discards both without returning an error.
 type Logger struct {
 	output    io.Writer
-	level     Level
-	formatter Formatter
+	formatter TextFormatter
 	mu        sync.Mutex
 }
 
-func New(output io.Writer, options ...Option) *Logger {
-	logger := &Logger{
+func New(output io.Writer) *Logger {
+	return &Logger{
 		output:    output,
-		level:     InfoLevel,
 		formatter: TextFormatter{Color: supportsColor(output)},
 	}
-	for _, option := range options {
-		option(logger)
-	}
-	return logger
-}
-
-func (l *Logger) Trace(message string, fields ...any) {
-	l.log(TraceLevel, message, fields...)
-}
-
-func (l *Logger) Debug(message string, fields ...any) {
-	l.log(DebugLevel, message, fields...)
-}
-
-func (l *Logger) Info(message string, fields ...any) {
-	l.log(InfoLevel, message, fields...)
 }
 
 func (l *Logger) Warn(message string, fields ...any) {
@@ -151,11 +104,6 @@ func (l *Logger) Error(message string, fields ...any) {
 	l.log(ErrorLevel, message, fields...)
 }
 
-func (l *Logger) Panic(message string, fields ...any) {
-	l.log(PanicLevel, message, fields...)
-	panic(message)
-}
-
 func (l *Logger) log(level Level, message string, fields ...any) {
 	if l == nil || l.output == nil {
 		return
@@ -163,15 +111,11 @@ func (l *Logger) log(level Level, message string, fields ...any) {
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if level < l.level {
-		return
-	}
 	entry := Entry{Time: time.Now(), Level: level, Message: message, Fields: fields}
 	_, _ = l.output.Write(l.formatter.Format(entry))
 }
 
-// Raw writes data exactly as provided. It bypasses level filtering and the
-// configured Formatter.
+// Raw writes data exactly as provided, without log formatting.
 func (l *Logger) Raw(data []byte) (int, error) {
 	if l == nil || l.output == nil {
 		return len(data), nil
@@ -196,18 +140,12 @@ func supportsColor(output io.Writer) bool {
 
 func levelColor(level Level) string {
 	switch level {
-	case TraceLevel:
-		return "90"
-	case DebugLevel:
-		return "36"
 	case InfoLevel:
 		return "32"
 	case WarnLevel:
 		return "33"
 	case ErrorLevel:
 		return "31"
-	case PanicLevel:
-		return "35"
 	default:
 		return ""
 	}

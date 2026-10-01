@@ -612,8 +612,8 @@ func TestFrameConfigurationEditsEachFieldBeforeApply(t *testing.T) {
 	m.Update(apply())
 
 	got := endpoint.configured
-	if got.DataBits != 7 || got.Parity != "odd" || got.StopBits != "1.5" || m.frameName() != "7,O,1.5" {
-		t.Fatalf("frame config = %#v, display = %q", got, m.frameName())
+	if got.DataBits != 7 || got.Parity != "odd" || got.StopBits != "1.5" {
+		t.Fatalf("frame config = %#v", got)
 	}
 }
 

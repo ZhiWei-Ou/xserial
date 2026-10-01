@@ -50,7 +50,7 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if showVersion {
 				info, ok := debug.ReadBuildInfo()
-				return writeBuildInfo(cmd.OutOrStdout(), info, ok)
+				return writeBuildInfo(cmd.OutOrStdout(), version, info, ok)
 			}
 			if len(args) == 0 {
 				return cmd.Help()
@@ -100,10 +100,6 @@ func newVersionCommand(version string) *cobra.Command {
 	}
 }
 
-func Execute() error {
-	return NewRootCommand().Execute()
-}
-
 func ExecuteContext(ctx context.Context) error {
 	return NewRootCommand().ExecuteContext(ctx)
 }
@@ -122,7 +118,7 @@ func versionFromBuildInfo(info *debug.BuildInfo, ok bool) string {
 	return info.Main.Version
 }
 
-func writeBuildInfo(w io.Writer, info *debug.BuildInfo, ok bool) error {
+func writeBuildInfo(w io.Writer, version string, info *debug.BuildInfo, ok bool) error {
 	if !ok {
 		return errors.New("Go build information is unavailable")
 	}
@@ -132,7 +128,7 @@ func writeBuildInfo(w io.Writer, info *debug.BuildInfo, ok bool) error {
 	}
 	var output strings.Builder
 	fields := []struct{ label, value string }{
-		{"Version", info.Main.Version},
+		{"Version", version},
 		{"Go", info.GoVersion},
 		{"Platform", strings.Trim(strings.Join([]string{settings["GOOS"], settings["GOARCH"]}, "/"), "/")},
 		{"Commit", settings["vcs.revision"]},

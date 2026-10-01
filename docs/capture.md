@@ -1,6 +1,6 @@
 # Session Recording Format
 
-`--record` saves original serial traffic and session events as versioned JSONL. The recommended extension is `.xsr`. Recording happens at the serial adapter boundary, before display transformations and protocol gates. Terminal timestamps, Hex rendering, and framing do not change the recorded bytes.
+`--record` saves original serial traffic and session events as versioned JSONL. The recommended extension is `.xsr`. Recording happens at the serial adapter boundary, before display transformations and transfer handling. Terminal timestamps, Hex rendering, and framing do not change the recorded bytes.
 
 ```bash
 xserial /dev/ttyUSB0 --record session.xsr
@@ -13,7 +13,7 @@ The first line contains `format=xserial-capture`, `version=1`, the start time, a
 | Kind | Meaning |
 | --- | --- |
 | `connected`, `disconnected`, `reconnecting`, `reconnected`, `closed` | Connection lifecycle |
-| `tx_request` | Complete request submitted to the sole writer after the outbound pipeline |
+| `tx_request` | Complete request submitted to the shared serial writer |
 | `tx` | Bytes actually accepted by one Write call; partial writes are recorded too |
 | `tx_complete` | Complete request acknowledged as sent; `request` refers to the `tx_request` sequence number |
 | `tx_failed` | Request not acknowledged as fully sent; retains the error and request reference |

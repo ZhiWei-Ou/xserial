@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -87,28 +89,6 @@ func TestSessionRoutesFrontendWritesThroughFullWriter(t *testing.T) {
 	}
 	if got := port.Written(); got != "abcdef" {
 		t.Fatalf("serial output = %q", got)
-	}
-}
-
-func TestSessionComposesConfiguredHandlers(t *testing.T) {
-	port := newBlockingPort()
-	handler := testHandler{name: "suffix", outbound: func(envelope Envelope) (Action, error) {
-		envelope.Data = append(envelope.Data, 0xff)
-		return Forward(envelope), nil
-	}}
-	frontend := frontendFunc(func(ctx context.Context, endpoint Endpoint) error {
-		if err := endpoint.Send(ctx, []byte{0x01}); err != nil {
-			return err
-		}
-		endpoint.Quit()
-		return nil
-	})
-
-	if err := New(Config{Port: port, Frontend: frontend, Handlers: []Handler{handler}}).Run(context.Background()); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if got := []byte(port.Written()); !bytes.Equal(got, []byte{0x01, 0xff}) {
-		t.Fatalf("serial output = %v", got)
 	}
 }
 
@@ -202,7 +182,18 @@ func TestSessionReconnectsAfterSuccessfulInitialConnection(t *testing.T) {
 }
 
 func TestSessionAppliesRuntimeConnectionConfiguration(t *testing.T) {
-	first := newBlockingPort()
+	sessionConn, devicePort := net.Pipe()
+	first := ymodemTestPort{Conn: sessionConn}
+	deviceDone := make(chan struct{})
+	go func() {
+		defer close(deviceDone)
+		for {
+			if err := transfer.WriteFull(devicePort, []byte("device output")); err != nil {
+				return
+			}
+		}
+	}()
+	defer func() { _ = devicePort.Close(); <-deviceDone }()
 	second := newBlockingPort()
 	want := ConnectionConfig{PortName: "/dev/test1", BaudRate: 921600, DataBits: 8, Parity: "none", StopBits: "1"}
 	var got ConnectionConfig
@@ -213,16 +204,32 @@ func TestSessionAppliesRuntimeConnectionConfiguration(t *testing.T) {
 		if !ok {
 			return errors.New("endpoint is not configurable")
 		}
+		events := endpoint.Events()
+		select {
+		case <-events:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		// Keep consuming device traffic while applying the configuration, as an
+		// interactive frontend does while its configuration command is pending.
+		drained := make(chan struct{})
+		go func() {
+			defer close(drained)
+			for range events {
+			}
+		}()
+		defer func() { endpoint.Quit(); <-drained }()
 		if err := configurable.Configure(ctx, want); err != nil {
 			return err
 		}
 		if err := endpoint.Send(ctx, []byte("configured")); err != nil {
 			return err
 		}
-		endpoint.Quit()
 		return nil
 	})
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	err := New(Config{
 		Port: first,
 		Reconnect: func() (SerialPort, error) {
@@ -233,7 +240,7 @@ func TestSessionAppliesRuntimeConnectionConfiguration(t *testing.T) {
 			return second, nil
 		},
 		Frontend: frontend,
-	}).Run(context.Background())
+	}).Run(ctx)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -292,6 +299,9 @@ func TestYMODEMUploadExcludesNormalWritesAndCancelsBeforeRunReturns(t *testing.T
 		for event := range endpoint.Events() {
 			if event, ok := event.(YMODEMFinished); ok {
 				finished = event
+				if err := endpoint.Send(ctx, []byte("after transfer")); err != nil {
+					return err
+				}
 				endpoint.Quit()
 				return nil
 			}
@@ -304,6 +314,9 @@ func TestYMODEMUploadExcludesNormalWritesAndCancelsBeforeRunReturns(t *testing.T
 	}
 	if !errors.Is(finished.Err, context.Canceled) {
 		t.Fatalf("upload finished = %#v", finished)
+	}
+	if !strings.HasSuffix(port.Written(), "after transfer") {
+		t.Fatalf("normal writes did not resume: %q", port.Written())
 	}
 }
 
@@ -320,27 +333,52 @@ func TestSessionRunsYMODEMUploadThroughSharedSerialReaderAndWriter(t *testing.T)
 	sessionPort := ymodemTestPort{Conn: sessionConn}
 	defer devicePort.Close()
 	receiveErr := make(chan error, 1)
+	consoleInput := []byte("console input")
+	consoleOutput := []byte("console output")
 	go func() {
-		_, _, err := transfer.ReceiveYMODEMFile(context.Background(), destinationDir, devicePort, nil, nil)
-		receiveErr <- err
+		if _, _, err := transfer.ReceiveYMODEMFile(context.Background(), destinationDir, devicePort, nil, nil); err != nil {
+			receiveErr <- err
+			return
+		}
+		got := make([]byte, len(consoleInput))
+		if _, err := io.ReadFull(devicePort, got); err != nil {
+			receiveErr <- err
+			return
+		}
+		if !bytes.Equal(got, consoleInput) {
+			receiveErr <- fmt.Errorf("console input = %q", got)
+			return
+		}
+		receiveErr <- transfer.WriteFull(devicePort, consoleOutput)
 	}()
 	frontend := frontendFunc(func(ctx context.Context, endpoint Endpoint) error {
 		if err := endpoint.StartYMODEMUpload(ctx, source); err != nil {
 			return err
 		}
+		var received []byte
 		for event := range endpoint.Events() {
-			if event, ok := event.(YMODEMFinished); ok {
+			switch event := event.(type) {
+			case YMODEMFinished:
 				if event.Err != nil {
 					return event.Err
 				}
-				endpoint.Quit()
-				return nil
+				if err := endpoint.Send(ctx, consoleInput); err != nil {
+					return err
+				}
+			case Received:
+				received = append(received, event.Data...)
+				if bytes.Equal(received, consoleOutput) {
+					endpoint.Quit()
+					return nil
+				}
 			}
 		}
-		return nil
+		return fmt.Errorf("console output = %q", received)
 	})
 
-	if err := New(Config{Port: sessionPort, Frontend: frontend}).Run(context.Background()); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := New(Config{Port: sessionPort, Frontend: frontend}).Run(ctx); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if err := <-receiveErr; err != nil {

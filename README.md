@@ -75,7 +75,7 @@ Add `http://127.0.0.1:8765/mcp` to your agent's MCP configuration. For stdio cli
 | `serial_read` | Read output with continuation cursors |
 | `serial_send` | Send text, Hex, or base64 bytes |
 
-MCP is available in the current source; v0.1.0 does not include it. See the [MCP guide](docs/mcp.md) for setup.
+See the [MCP guide](docs/mcp.md) for setup.
 
 ### More commands
 

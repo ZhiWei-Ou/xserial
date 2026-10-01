@@ -119,10 +119,6 @@ func parityCode(value string) string {
 	}
 }
 
-func (m *model) frameName() string {
-	return fmt.Sprintf("%d,%s,%s", m.dataBits, parityCode(m.parity), m.stopBits)
-}
-
 func (m *model) currentConnectionConfig() middleware.ConnectionConfig {
 	return middleware.ConnectionConfig{
 		PortName: m.portName,

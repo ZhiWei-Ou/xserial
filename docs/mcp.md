@@ -7,7 +7,7 @@ and forwards requests; it never opens a serial port itself.
 
 ## Start a terminal and MCP
 
-Build with `make build`, then run these in separate terminals, in either order:
+Download xserial from [Releases](https://github.com/ZhiWei-Ou/xserial/releases/latest), then run these in separate terminals, in either order:
 
 ```sh
 xserial /dev/ttyUSB0 115200

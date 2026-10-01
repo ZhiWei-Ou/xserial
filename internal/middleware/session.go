@@ -125,7 +125,6 @@ type Config struct {
 	ReceiveLog        io.Writer
 	ReceiveTimeFormat string
 	Logger            *logging.Logger
-	Handlers          []Handler
 	Recorder          *capture.Writer
 }
 
@@ -143,21 +142,20 @@ type endpoint struct {
 	readyOnce      sync.Once
 	logger         *logging.Logger
 	backend        *backend.Endpoint
-	pipeline       *Pipeline
 	openConnection func(ConnectionConfig) (SerialPort, error)
 
 	// A sender owns the gate for one whole request. Waiting senders can cancel;
 	// configuration and transfer startup use the same gate. It is never closed.
-	sendGate            chan struct{}
-	debug               *debugsession.Session
-	mu                  sync.Mutex
-	stopping            bool
-	transferActive      bool
-	transferCancel      context.CancelFunc
-	transferInput       chan []byte
-	transferHandlerName string
-	workers             sync.WaitGroup
-	recorder            *capture.Writer
+	sendGate       chan struct{}
+	debug          *debugsession.Session
+	mu             sync.Mutex
+	stopping       bool
+	transferActive bool
+	transferCancel context.CancelFunc
+	transferInput  chan []byte
+	transferDone   <-chan struct{}
+	workers        sync.WaitGroup
+	recorder       *capture.Writer
 }
 
 func (e *endpoint) Events() <-chan Event {
@@ -166,27 +164,6 @@ func (e *endpoint) Events() <-chan Event {
 }
 
 func (e *endpoint) markReady() { e.readyOnce.Do(func() { close(e.ready) }) }
-
-type transferGate struct {
-	name  string
-	input chan<- []byte
-	done  <-chan struct{}
-}
-
-func (g *transferGate) Name() string { return g.name }
-func (g *transferGate) Capability() Capability {
-	return ExclusiveDuplex
-}
-func (g *transferGate) HandleInbound(ctx context.Context, envelope Envelope) (Action, error) {
-	select {
-	case g.input <- append([]byte(nil), envelope.Data...):
-		return Consume(), nil
-	case <-g.done:
-		return Consume(), nil
-	case <-ctx.Done():
-		return Action{}, ctx.Err()
-	}
-}
 
 func (e *endpoint) Send(ctx context.Context, data []byte) error {
 	return e.send(ctx, data, 0, nil, "frontend")
@@ -228,11 +205,12 @@ func (e *endpoint) Configure(ctx context.Context, cfg ConnectionConfig) error {
 	}
 	defer func() { <-e.sendGate }()
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.stopping {
+	stopping, busy := e.stopping, e.transferActive
+	e.mu.Unlock()
+	if stopping {
 		return context.Canceled
 	}
-	if e.transferActive {
+	if busy {
 		return ErrTransferActive
 	}
 	if e.openConnection == nil {
@@ -255,25 +233,16 @@ func (e *endpoint) writeTransfer(ctx context.Context, data []byte) error {
 }
 
 func (e *endpoint) writeFromGeneration(ctx context.Context, source string, data []byte, generation uint64, checkpoint func()) error {
-	envelope, err := e.pipeline.ProcessOutbound(ctx, Envelope{
-		Data: data, Source: source, At: time.Now(),
-	})
-	if err != nil {
-		if errors.Is(err, ErrDirectionBusy) {
-			return ErrTransferActive
-		}
-		return err
-	}
-	request, err := e.recorder.Append(capture.Record{Kind: "tx_request", Data: envelope.Data, Note: source})
+	request, err := e.recorder.Append(capture.Record{Kind: "tx_request", Data: data, Note: source})
 	if err != nil {
 		e.cancel()
 		return err
 	}
 	var sendErr error
 	if generation == 0 {
-		sendErr = e.backend.Send(ctx, envelope.Data)
+		sendErr = e.backend.Send(ctx, data)
 	} else {
-		sendErr = e.backend.SendGeneration(ctx, generation, envelope.Data, checkpoint)
+		sendErr = e.backend.SendGeneration(ctx, generation, data, checkpoint)
 	}
 	if errors.Is(sendErr, backend.ErrStaleConnection) {
 		if generation == 0 {
@@ -301,18 +270,18 @@ func (e *endpoint) writeFromGeneration(ctx context.Context, source string, data 
 }
 
 func (e *endpoint) StartYMODEMUpload(ctx context.Context, path string) error {
-	return e.startTransfer(ctx, func(transferCtx context.Context) {
-		e.runYMODEMUpload(transferCtx, path)
+	return e.startTransfer(ctx, func(transferCtx context.Context, stream io.ReadWriter) {
+		e.runYMODEMUpload(transferCtx, path, stream)
 	})
 }
 
 func (e *endpoint) StartYMODEMDownload(ctx context.Context, dir string) error {
-	return e.startTransfer(ctx, func(transferCtx context.Context) {
-		e.runYMODEMDownload(transferCtx, dir)
+	return e.startTransfer(ctx, func(transferCtx context.Context, stream io.ReadWriter) {
+		e.runYMODEMDownload(transferCtx, dir, stream)
 	})
 }
 
-func (e *endpoint) startTransfer(ctx context.Context, run func(context.Context)) error {
+func (e *endpoint) startTransfer(ctx context.Context, run func(context.Context, io.ReadWriter)) error {
 	if err := e.acquireSend(ctx); err != nil {
 		return err
 	}
@@ -332,30 +301,23 @@ func (e *endpoint) startTransfer(ctx context.Context, run func(context.Context))
 	transferCtx, cancel := context.WithCancel(e.ctx)
 	e.transferActive = true
 	e.transferCancel = cancel
+	// The dispatcher feeds the transfer worker with bounded backpressure. The
+	// channel stays open; transfer cancellation releases a blocked dispatcher.
 	e.transferInput = make(chan []byte, 32)
-	gate := &transferGate{name: "transfer.active", input: e.transferInput, done: transferCtx.Done()}
-	if err := e.pipeline.Add(ctx, gate); err != nil {
-		cancel()
-		e.transferActive = false
-		e.transferCancel = nil
-		e.transferInput = nil
-		e.mu.Unlock()
-		return err
-	}
-	e.transferHandlerName = gate.name
+	e.transferDone = transferCtx.Done()
+	stream := &transferStream{ctx: transferCtx, endpoint: e, input: e.transferInput}
 	e.workers.Add(1)
 	e.mu.Unlock()
 	e.markReady()
 
 	go func() {
 		defer e.workers.Done()
-		run(transferCtx)
+		run(transferCtx, stream)
 	}()
 	return nil
 }
 
-func (e *endpoint) runYMODEMUpload(ctx context.Context, path string) {
-	stream := &transferStream{ctx: ctx, endpoint: e, input: e.transferInput}
+func (e *endpoint) runYMODEMUpload(ctx context.Context, path string, stream io.ReadWriter) {
 	stats, err := transfer.SendYMODEMFile(ctx, path, stream, func(written, total int64) {
 		e.emit(YMODEMProgress{Direction: "upload", Path: path, Written: written, Total: total})
 	}, func(retry transfer.YMODEMRetry) {
@@ -365,8 +327,7 @@ func (e *endpoint) runYMODEMUpload(ctx context.Context, path string) {
 	e.emit(newYMODEMFinished("upload", path, stats, err))
 }
 
-func (e *endpoint) runYMODEMDownload(ctx context.Context, dir string) {
-	stream := &transferStream{ctx: ctx, endpoint: e, input: e.transferInput}
+func (e *endpoint) runYMODEMDownload(ctx context.Context, dir string, stream io.ReadWriter) {
 	path, stats, err := transfer.ReceiveYMODEMFile(ctx, dir, stream, func(written, total int64) {
 		e.emit(YMODEMProgress{Direction: "download", Written: written, Total: total})
 	}, func(retry transfer.YMODEMRetry) {
@@ -413,15 +374,12 @@ func (e *endpoint) waitForAcknowledgement(ctx context.Context, acknowledged <-ch
 
 func (e *endpoint) finishTransfer() {
 	e.mu.Lock()
-	handlerName := e.transferHandlerName
+	e.transferCancel()
 	e.transferActive = false
 	e.transferCancel = nil
 	e.transferInput = nil
-	e.transferHandlerName = ""
+	e.transferDone = nil
 	e.mu.Unlock()
-	if handlerName != "" {
-		_ = e.pipeline.Remove(context.Background(), handlerName)
-	}
 }
 
 type transferStream struct {
@@ -496,11 +454,6 @@ func (s *Session) Run(parent context.Context) error {
 	}
 
 	ctx, cancel := context.WithCancel(parent)
-	pipeline, err := NewPipeline(s.cfg.Handlers...)
-	if err != nil {
-		cancel()
-		return errors.Join(err, s.cfg.Port.Close())
-	}
 	var reconnect func() (backend.Port, error)
 	if s.cfg.Reconnect != nil {
 		reconnect = func() (backend.Port, error) {
@@ -518,7 +471,6 @@ func (s *Session) Run(parent context.Context) error {
 	if _, err := s.cfg.Recorder.Append(capture.Record{Kind: "connected"}); err != nil {
 		cancel()
 		_ = port.Close()
-		_ = pipeline.Close(context.Background())
 		return err
 	}
 	var observer backend.Observer
@@ -540,15 +492,15 @@ func (s *Session) Run(parent context.Context) error {
 	case backendEndpoint = <-ready:
 	case err := <-backendDone:
 		cancel()
-		return errors.Join(normalizeRunError(err), pipeline.Close(context.Background()))
+		return normalizeRunError(err)
 	case <-parent.Done():
 		cancel()
 		err := <-backendDone
-		return errors.Join(normalizeRunError(err), pipeline.Close(context.Background()))
+		return normalizeRunError(err)
 	}
 	e := &endpoint{
 		sendGate: make(chan struct{}, 1), debug: s.cfg.Debug, ctx: ctx, cancel: cancel, events: make(chan Event, 32), logger: s.cfg.Logger,
-		ready: make(chan struct{}), backend: backendEndpoint, pipeline: pipeline,
+		ready: make(chan struct{}), backend: backendEndpoint,
 		openConnection: s.cfg.OpenConnection,
 		recorder:       s.cfg.Recorder,
 	}
@@ -591,12 +543,9 @@ func (s *Session) Run(parent context.Context) error {
 	}
 	e.workers.Wait()
 	// Cancellation unblocks the backend call. Wait for its caller to record the
-	// outcome before closing the pipeline and appending the final journal event.
+	// outcome before appending the final journal event.
 	e.sendGate <- struct{}{}
 	<-e.sendGate
-	if err := pipeline.Close(context.Background()); runErr == nil {
-		runErr = err
-	}
 	close(e.events)
 
 	if !frontendReturned {
@@ -658,14 +607,20 @@ func (s *Session) runBackendEvents(ctx context.Context, e *endpoint) error {
 }
 
 func (e *endpoint) deliverReceived(ctx context.Context, data []byte, at time.Time) bool {
-	envelope, err := e.pipeline.ProcessInbound(ctx, Envelope{Data: data, Source: "serial", At: at})
-	if errors.Is(err, ErrConsumed) {
-		return true
+	e.mu.Lock()
+	input, done := e.transferInput, e.transferDone
+	e.mu.Unlock()
+	if input != nil {
+		select {
+		case input <- append([]byte(nil), data...):
+			return true
+		case <-done:
+			return true
+		case <-ctx.Done():
+			return false
+		}
 	}
-	if err != nil {
-		return false
-	}
-	return e.emit(Received{Data: envelope.Data, At: envelope.At})
+	return e.emit(Received{Data: append([]byte(nil), data...), At: at})
 }
 
 func normalizeRunError(err error) error {

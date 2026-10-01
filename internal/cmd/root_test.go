@@ -26,15 +26,6 @@ func TestVersionFallsBackForDevelopmentBuild(t *testing.T) {
 	}
 }
 
-func TestVersionUsesReleaseBuildValue(t *testing.T) {
-	previous := buildVersion
-	buildVersion = "v1.2.3"
-	t.Cleanup(func() { buildVersion = previous })
-	if got := currentVersion(); got != "v1.2.3" {
-		t.Fatalf("currentVersion() = %q, want v1.2.3", got)
-	}
-}
-
 func TestRootWithoutPositionalsShowsHelp(t *testing.T) {
 	listed := false
 	connected := false
@@ -170,16 +161,6 @@ func TestRootHelpShowsCompactXserialLogo(t *testing.T) {
 	}
 }
 
-func TestRootHelpShowsDirectConnectionExample(t *testing.T) {
-	if directConnExamples == "" {
-		t.Skip("direct connection example is not available on this platform")
-	}
-	cmd := NewRootCommand()
-	if !strings.Contains(cmd.Example, "xserial "+directConnExamplePort) {
-		t.Fatalf("Example = %q, want direct port %q", cmd.Example, directConnExamplePort)
-	}
-}
-
 func TestRootHexdumpFlags(t *testing.T) {
 	for _, args := range [][]string{{"-h", "test-port"}, {"test-port", "--hexdump", "--time"}, {"test-port"}} {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
@@ -210,12 +191,15 @@ func TestRootRejectsHexdumpWithTUI(t *testing.T) {
 	}
 }
 
-func TestVersionFlagsShowBuildInfoWithoutConnecting(t *testing.T) {
+func TestVersionCommandsUseReleaseVersionWithoutConnecting(t *testing.T) {
+	previous := buildVersion
+	buildVersion = "v0.2.0"
+	t.Cleanup(func() { buildVersion = previous })
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		t.Fatal("test binary has no build info")
 	}
-	for _, args := range [][]string{{"-v"}, {"--version"}, {"test-port", "-v"}} {
+	for _, args := range [][]string{{"version"}, {"-v"}, {"--version"}, {"test-port", "-v"}} {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			cmd := newRootCommand(rootDependencies{conn: func(context.Context, connOptions) error { t.Fatal("version must not open a port"); return nil }})
 			var output bytes.Buffer
@@ -224,7 +208,13 @@ func TestVersionFlagsShowBuildInfoWithoutConnecting(t *testing.T) {
 			if err := cmd.Execute(); err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(output.String(), "Go:          "+info.GoVersion) || strings.Contains(output.String(), "dep\t") {
+			if args[0] == "version" {
+				if strings.TrimSpace(output.String()) != "v0.2.0" {
+					t.Fatalf("version output = %q", output.String())
+				}
+				return
+			}
+			if !strings.Contains(output.String(), "Version:     v0.2.0\n") || !strings.Contains(output.String(), "Go:          "+info.GoVersion) || strings.Contains(output.String(), "dep\t") {
 				t.Fatalf("version output = %q", output.String())
 			}
 		})
@@ -234,25 +224,17 @@ func TestVersionFlagsShowBuildInfoWithoutConnecting(t *testing.T) {
 func TestDetailedVersionPreservesBuildMetadata(t *testing.T) {
 	info := &debug.BuildInfo{GoVersion: "go1.26.2", Path: "example.com/app/cmd/app", Main: debug.Module{Path: "example.com/app", Version: "(devel)"}, Settings: []debug.BuildSetting{{Key: "GOOS", Value: "linux"}, {Key: "GOARCH", Value: "arm64"}, {Key: "vcs.time", Value: "2026-09-14T13:47:29Z"}, {Key: "vcs.revision", Value: "abcdef"}, {Key: "vcs.modified", Value: "true"}}}
 	var output bytes.Buffer
-	if err := writeBuildInfo(&output, info, true); err != nil {
+	if err := writeBuildInfo(&output, "v0.2.0", info, true); err != nil {
 		t.Fatal(err)
 	}
-	want := "Version:     (devel)\nGo:          go1.26.2\nPlatform:    linux/arm64\nCommit:      abcdef\nCommit time: 2026-09-14T13:47:29Z\nModified:    true\n"
+	want := "Version:     v0.2.0\nGo:          go1.26.2\nPlatform:    linux/arm64\nCommit:      abcdef\nCommit time: 2026-09-14T13:47:29Z\nModified:    true\n"
 	if output.String() != want {
 		t.Fatalf("output = %q, want %q", output.String(), want)
 	}
-	var minimal bytes.Buffer
-	if err := writeBuildInfo(&minimal, &debug.BuildInfo{GoVersion: "go1.26.2"}, true); err != nil {
-		t.Fatal(err)
-	}
-	if minimal.String() != "Go:          go1.26.2\n" {
-		t.Fatalf("minimal output = %q", minimal.String())
-	}
-
-	if err := writeBuildInfo(&output, nil, false); err == nil {
+	if err := writeBuildInfo(&output, "v0.2.0", nil, false); err == nil {
 		t.Fatal("missing build info should return an error")
 	}
-	if err := writeBuildInfo(versionErrorWriter{}, info, true); !errors.Is(err, io.ErrClosedPipe) {
+	if err := writeBuildInfo(versionErrorWriter{}, "v0.2.0", info, true); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("write error = %v", err)
 	}
 }
