@@ -84,6 +84,7 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 	rootCmd.AddCommand(newVersionCommand(version))
 	rootCmd.AddCommand(newDemoCommand())
 	rootCmd.AddCommand(newReplayCommand(), newExportCommand())
+	rootCmd.AddCommand(newMCPCommand())
 	return rootCmd
 }
 

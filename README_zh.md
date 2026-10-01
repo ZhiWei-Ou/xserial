@@ -33,6 +33,8 @@ https://github.com/user-attachments/assets/91dca830-0c6a-41ba-96f0-97ad97430697
 
 ## 核心功能
 
+- **让 coding agent 调试设备。** MCP 提供持续连接的串口终端、精确字节发送和带游标的有限等待读取；本地唯一 daemon 在客户端重启后保留连接。
+
 - **发送与观察字节。** 编辑经过校验的 Hex 输入，对照带时间、长度、Hex 和 ASCII 的 TX/RX，复用发送历史与命令收藏。
 - **理解二进制字段。** 选中字节，查看大小端整数与浮点数；预览、追加和检查 CRC16 Modbus、SUM8、XOR8 校验。
 - **重组响应。** 显式选择固定长度、分隔符、长度字段或 Modbus 寄存器响应分帧，处理半帧与粘连。
@@ -166,6 +168,7 @@ xserial /dev/ttyUSB0 9600,8,E,1 --workbench --frame fixed:9
 - [English README](README.md)
 - [工作台说明与 Modbus 示例](docs/workbench.md)
 - [录制格式、回放与导出](docs/capture.md)
+- [MCP 设备调试与 daemon 生命周期](docs/mcp.md)
 - [协议示例与录制样本](examples/modbus/README.md)
 
 以上详细指南使用英文。

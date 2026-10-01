@@ -37,6 +37,7 @@ https://github.com/user-attachments/assets/91dca830-0c6a-41ba-96f0-97ad97430697
 - **Understand binary fields.** Select bytes to inspect integers and floating-point values in both byte orders. Preview, append, and verify CRC16 Modbus, SUM8, and XOR8 checksums.
 - **Reassemble responses.** Choose fixed-length, delimiter, length-field, or Modbus register-response framing to handle split and joined reads.
 - **Debug offline.** Record original RX/TX bytes and connection events, then replay, search, mark, and export a conversation after the device is disconnected.
+- **Let coding agents debug devices.** MCP tools provide a persistent serial terminal, exact-byte sending, and bounded reads with continuation cursors. One local daemon preserves the connection across client restarts.
 - **Try it without hardware.** The built-in simulated device demonstrates normal responses, bad CRCs, split responses, and joined responses through the same workbench.
 - **Keep a classic serial terminal.** Use byte-transparent RawUI or the full-screen terminal UI, with automatic reconnection, receive logging, timestamps, and single-file YMODEM transfer. Supports Linux, macOS, and Windows.
 
@@ -166,6 +167,7 @@ Framing rules include `chunk`, `fixed:N`, `delimiter:HEX`, `length:OFFSET:WIDTH:
 - [Chinese README](README_zh.md)
 - [Workbench guide and Modbus examples](docs/workbench.md)
 - [Recording format, replay, and export](docs/capture.md)
+- [MCP device debugging and daemon lifecycle](docs/mcp.md)
 - [Protocol examples and sample recording](examples/modbus/README.md)
 
 The guides above are written in English.
