@@ -1,0 +1,7 @@
+{"format":"xserial-capture","version":1,"started":"2026-10-01T10:56:12.216691418+08:00","port":"simulated-device","baud":115200,"data_bits":8,"parity":"none","stop_bits":"1"}
+{"seq":1,"at":"2026-10-01T10:56:12.216758529+08:00","kind":"connected"}
+{"seq":2,"at":"2026-10-01T10:56:12.216846701+08:00","kind":"tx_request","data":"AQMAAAACxAs=","note":"frontend"}
+{"seq":3,"at":"2026-10-01T10:56:12.216892317+08:00","kind":"tx","data":"AQMAAAACxAs="}
+{"seq":4,"at":"2026-10-01T10:56:12.216905596+08:00","kind":"tx_complete","request":2}
+{"seq":5,"at":"2026-10-01T10:56:12.216924397+08:00","kind":"rx","data":"AQMEAGQAZXvH"}
+{"seq":6,"at":"2026-10-01T10:56:12.217046033+08:00","kind":"closed"}

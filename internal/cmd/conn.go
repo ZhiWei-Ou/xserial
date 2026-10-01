@@ -2,38 +2,51 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ZhiWei-Ou/xserial/internal/capture"
+	"github.com/ZhiWei-Ou/xserial/internal/hexdata"
 	"github.com/ZhiWei-Ou/xserial/internal/logging"
 	session "github.com/ZhiWei-Ou/xserial/internal/middleware"
 	"github.com/ZhiWei-Ou/xserial/internal/rawui"
 	"github.com/ZhiWei-Ou/xserial/internal/serialport"
 	serialtui "github.com/ZhiWei-Ou/xserial/internal/tui"
+	"github.com/ZhiWei-Ou/xserial/internal/workbench"
 	"github.com/spf13/cobra"
 )
 
 type connOptions struct {
-	port       string
-	baud       int
-	dataBits   int
-	parity     string
-	stopBits   string
-	logPath    string
-	timeFormat string
-	tui        bool
-	hexdump    bool
+	port          string
+	baud          int
+	dataBits      int
+	parity        string
+	stopBits      string
+	logPath       string
+	timeFormat    string
+	tui           bool
+	hexdump       bool
+	workbench     bool
+	favoritesPath string
+	framing       hexdata.FrameConfig
+	recordPath    string
 }
 
 type connFlags struct {
-	logPath  string
-	showTime bool
-	useTUI   bool
-	hexdump  bool
+	logPath       string
+	showTime      bool
+	useTUI        bool
+	hexdump       bool
+	workbench     bool
+	favoritesPath string
+	frameRule     string
+	recordPath    string
 }
 
 const (
@@ -47,7 +60,13 @@ func bindConnFlags(cmd *cobra.Command, flags *connFlags) {
 	cmd.Flags().StringVar(&flags.logPath, "log", "", "append received bytes to file")
 	cmd.Flags().BoolVarP(&flags.showTime, "time", "t", false, "prepend timestamps (HH:MM:SS.mmm) to received lines")
 	cmd.Flags().BoolVar(&flags.useTUI, "TUI", false, "open the full-screen interface (Beta, unstable)")
+	cmd.Flags().BoolVar(&flags.workbench, "workbench", false, "open the binary serial debugging workbench")
+	cmd.Flags().StringVar(&flags.favoritesPath, "commands", "", "command favorites JSON file (default: user config directory)")
+	cmd.Flags().StringVar(&flags.frameRule, "frame", "chunk", "RX framing: chunk, fixed:N, delimiter:HEX, length:OFFSET:WIDTH:OVERHEAD:le|be, modbus-read")
+	cmd.Flags().StringVar(&flags.recordPath, "record", "", "record original RX/TX and connection events to a new .xsr file")
 	cmd.MarkFlagsMutuallyExclusive("hexdump", "TUI")
+	cmd.MarkFlagsMutuallyExclusive("workbench", "TUI")
+	cmd.MarkFlagsMutuallyExclusive("workbench", "hexdump")
 }
 
 func parseConnOptions(args []string, logPath string, showTime, useTUI bool) (connOptions, error) {
@@ -118,7 +137,15 @@ func parseConnOptions(args []string, logPath string, showTime, useTUI bool) (con
 	return opts, nil
 }
 
-func runConn(ctx context.Context, opts connOptions) error {
+func runConn(ctx context.Context, opts connOptions) (runErr error) {
+	var favorites []workbench.Favorite
+	if opts.workbench {
+		var err error
+		opts.favoritesPath, favorites, err = loadCommandFavorites(opts.favoritesPath)
+		if err != nil {
+			return err
+		}
+	}
 	logger := logging.New(os.Stderr)
 	connectionConfig := session.ConnectionConfig{
 		PortName: opts.port,
@@ -140,6 +167,14 @@ func runConn(ctx context.Context, opts connOptions) error {
 	if err != nil {
 		return fmt.Errorf("open serial port %q: %w", opts.port, err)
 	}
+	recordFile, recorder, err := openRecording(opts.recordPath, connectionConfig)
+	if err != nil {
+		_ = port.Close()
+		return err
+	}
+	if recordFile != nil {
+		defer func() { runErr = errors.Join(runErr, recordFile.Close()) }()
+	}
 
 	receiveLog, err := openReceiveLog(opts.logPath)
 	if err != nil {
@@ -152,7 +187,15 @@ func runConn(ctx context.Context, opts connOptions) error {
 
 	var frontend session.Frontend
 	sessionLogger := logger
-	if opts.tui {
+	if opts.workbench {
+		sessionLogger = nil
+		frontend = workbench.New(workbench.Config{
+			Input: os.Stdin, Output: os.Stdout, Connection: connectionConfig,
+			FavoritesPath: opts.favoritesPath, Favorites: favorites,
+			Framing:  opts.framing,
+			Recorder: recorder,
+		})
+	} else if opts.tui {
 		// The TUI renders transfer status itself; background stderr writes would
 		// corrupt Bubble Tea's alternate-screen output.
 		sessionLogger = nil
@@ -199,8 +242,37 @@ func runConn(ctx context.Context, opts connOptions) error {
 		ReceiveLog:        receiveLog,
 		ReceiveTimeFormat: opts.timeFormat,
 		Logger:            sessionLogger,
+		Recorder:          recorder,
 	})
 	return s.Run(ctx)
+}
+
+func openRecording(path string, cfg session.ConnectionConfig) (*os.File, *capture.Writer, error) {
+	if path == "" {
+		return nil, nil, nil
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create recording %q: %w", path, err)
+	}
+	recorder, err := capture.NewWriter(file, capture.Header{Port: cfg.PortName, Baud: cfg.BaudRate, DataBits: cfg.DataBits, Parity: cfg.Parity, StopBits: cfg.StopBits})
+	if err != nil {
+		_ = file.Close()
+		return nil, nil, err
+	}
+	return file, recorder, nil
+}
+
+func loadCommandFavorites(path string) (string, []workbench.Favorite, error) {
+	if path == "" {
+		dir, err := os.UserConfigDir()
+		if err != nil {
+			return "", nil, fmt.Errorf("locate command favorites: %w", err)
+		}
+		path = filepath.Join(dir, "xserial", "commands.json")
+	}
+	favorites, err := workbench.LoadFavorites(path)
+	return path, favorites, err
 }
 
 func openReceiveLog(path string) (io.WriteCloser, error) {

@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/ZhiWei-Ou/xserial/internal/hexdata"
 	"github.com/ZhiWei-Ou/xserial/internal/serialport"
 	"github.com/spf13/cobra"
 )
@@ -59,6 +60,16 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 				return err
 			}
 			opts.hexdump = flags.hexdump
+			opts.workbench = flags.workbench
+			opts.favoritesPath = flags.favoritesPath
+			opts.recordPath = flags.recordPath
+			if flags.frameRule != "chunk" && !flags.workbench {
+				return errors.New("--frame requires --workbench")
+			}
+			opts.framing, err = hexdata.ParseFrameConfig(flags.frameRule)
+			if err != nil {
+				return err
+			}
 			return deps.conn(cmd.Context(), opts)
 		},
 	}
@@ -71,6 +82,8 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "show version and build summary")
 	rootCmd.AddCommand(newListCommand(deps.list))
 	rootCmd.AddCommand(newVersionCommand(version))
+	rootCmd.AddCommand(newDemoCommand())
+	rootCmd.AddCommand(newReplayCommand(), newExportCommand())
 	return rootCmd
 }
 

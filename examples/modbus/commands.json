@@ -1,0 +1,18 @@
+[
+  {
+    "name": "Read registers",
+    "hex": "01 03 00 00 00 02 C4 0B"
+  },
+  {
+    "name": "Bad response CRC",
+    "hex": "02 03 00 00 00 02 C4 38"
+  },
+  {
+    "name": "Split response",
+    "hex": "03 03 00 00 00 02 C5 E9"
+  },
+  {
+    "name": "Joined responses (address 4)",
+    "hex": "04 03 00 00 00 02 C4 5E"
+  }
+]
