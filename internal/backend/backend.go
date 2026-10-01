@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZhiWei-Ou/xserial/internal/capture"
 	"github.com/ZhiWei-Ou/xserial/internal/transfer"
 )
 
@@ -211,6 +212,9 @@ func (s *Session) runWriter(ctx context.Context, e *Endpoint, failures chan<- co
 			}
 			if err := transfer.WriteFull(port, req.data); err != nil {
 				req.done <- fmt.Errorf("%w: %w", ErrDisconnected, err)
+				if errors.Is(err, capture.ErrRecording) {
+					return err
+				}
 				select {
 				case failures <- connectionFailure{generation, fmt.Errorf("write serial port: %w", err)}:
 				case <-ctx.Done():
@@ -274,6 +278,9 @@ func (s *Session) runConnections(ctx context.Context, e *Endpoint, failures chan
 			e.setConnection(nil, generation)
 			_ = port.Close()
 			<-readerDone
+			if errors.Is(failure.err, capture.ErrRecording) {
+				return failure.err
+			}
 			e.emit(Disconnected{Err: failure.err})
 			newPort, newOpen, attempt, configured, err := s.reconnect(ctx, e, open, failure.err)
 			if err != nil {

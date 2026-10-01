@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ZhiWei-Ou/xserial/internal/backend"
+	"github.com/ZhiWei-Ou/xserial/internal/capture"
 	"github.com/ZhiWei-Ou/xserial/internal/linetime"
 	"github.com/ZhiWei-Ou/xserial/internal/logging"
 	"github.com/ZhiWei-Ou/xserial/internal/transfer"
@@ -122,6 +123,7 @@ type Config struct {
 	ReceiveTimeFormat string
 	Logger            *logging.Logger
 	Handlers          []Handler
+	Recorder          *capture.Writer
 }
 
 type Session struct {
@@ -148,6 +150,7 @@ type endpoint struct {
 	transferInput       chan []byte
 	transferHandlerName string
 	workers             sync.WaitGroup
+	recorder            *capture.Writer
 }
 
 func (e *endpoint) Events() <-chan Event {
@@ -205,7 +208,11 @@ func (e *endpoint) Configure(ctx context.Context, cfg ConnectionConfig) error {
 		return ErrNotConfigurable
 	}
 	return e.backend.Reconfigure(ctx, func() (backend.Port, error) {
-		return e.openConnection(cfg)
+		port, err := e.openConnection(cfg)
+		if err == nil && e.recorder != nil {
+			return &capture.Port{ReadWriteCloser: port, Recorder: e.recorder}, nil
+		}
+		return port, err
 	})
 }
 
@@ -227,7 +234,23 @@ func (e *endpoint) writeFrom(ctx context.Context, source string, data []byte) er
 		}
 		return err
 	}
-	if err := e.backend.Send(ctx, envelope.Data); errors.Is(err, backend.ErrDisconnected) {
+	request, err := e.recorder.Append(capture.Record{Kind: "tx_request", Data: envelope.Data, Note: source})
+	if err != nil {
+		e.cancel()
+		return err
+	}
+	sendErr := e.backend.Send(ctx, envelope.Data)
+	result := capture.Record{Kind: "tx_complete", Request: request}
+	if sendErr != nil {
+		result.Kind = "tx_failed"
+		result.Error = sendErr.Error()
+	}
+	_, recordErr := e.recorder.Append(result)
+	if recordErr != nil {
+		e.cancel()
+		return errors.Join(sendErr, recordErr)
+	}
+	if err := sendErr; errors.Is(err, backend.ErrDisconnected) {
 		return fmt.Errorf("%w: %w", ErrDisconnected, err)
 	} else {
 		return err
@@ -433,10 +456,26 @@ func (s *Session) Run(parent context.Context) error {
 	}
 	var reconnect func() (backend.Port, error)
 	if s.cfg.Reconnect != nil {
-		reconnect = func() (backend.Port, error) { return s.cfg.Reconnect() }
+		reconnect = func() (backend.Port, error) {
+			port, err := s.cfg.Reconnect()
+			if err == nil && s.cfg.Recorder != nil {
+				return &capture.Port{ReadWriteCloser: port, Recorder: s.cfg.Recorder}, nil
+			}
+			return port, err
+		}
+	}
+	port := s.cfg.Port
+	if s.cfg.Recorder != nil {
+		port = &capture.Port{ReadWriteCloser: port, Recorder: s.cfg.Recorder}
+	}
+	if _, err := s.cfg.Recorder.Append(capture.Record{Kind: "connected"}); err != nil {
+		cancel()
+		_ = port.Close()
+		_ = pipeline.Close(context.Background())
+		return err
 	}
 	backendSession := backend.New(backend.Config{
-		Port:              s.cfg.Port,
+		Port:              port,
 		Reconnect:         reconnect,
 		ReconnectInterval: s.cfg.ReconnectInterval,
 	})
@@ -458,6 +497,7 @@ func (s *Session) Run(parent context.Context) error {
 		ctx: ctx, cancel: cancel, events: make(chan Event, 32), logger: s.cfg.Logger,
 		ready: make(chan struct{}), backend: backendEndpoint, pipeline: pipeline,
 		openConnection: s.cfg.OpenConnection,
+		recorder:       s.cfg.Recorder,
 	}
 	dispatcherDone := make(chan error, 1)
 	go func() { dispatcherDone <- s.runBackendEvents(ctx, e) }()
@@ -504,7 +544,11 @@ func (s *Session) Run(parent context.Context) error {
 			runErr = normalizeRunError(err)
 		}
 	}
-	return runErr
+	_, recordErr := s.cfg.Recorder.Append(capture.Record{Kind: "closed"})
+	if errors.Is(runErr, capture.ErrRecording) {
+		return runErr
+	}
+	return errors.Join(runErr, recordErr)
 }
 
 func (s *Session) runBackendEvents(ctx context.Context, e *endpoint) error {
@@ -532,11 +576,20 @@ func (s *Session) runBackendEvents(ctx context.Context, e *endpoint) error {
 				return context.Canceled
 			}
 		case backend.Disconnected:
+			if _, err := e.recorder.Append(capture.Record{Kind: "disconnected", Error: event.Err.Error()}); err != nil {
+				return err
+			}
 			e.CancelTransfer()
 			e.emit(Disconnected{Err: event.Err})
 		case backend.Reconnecting:
+			if _, err := e.recorder.Append(capture.Record{Kind: "reconnecting", Error: event.Err.Error(), Note: fmt.Sprintf("attempt %d", event.Attempt)}); err != nil {
+				return err
+			}
 			e.emit(Reconnecting{Attempt: event.Attempt, Err: event.Err})
 		case backend.Reconnected:
+			if _, err := e.recorder.Append(capture.Record{Kind: "reconnected"}); err != nil {
+				return err
+			}
 			e.emit(Reconnected{})
 		}
 	}
