@@ -158,10 +158,6 @@ Framing rules include `chunk`, `fixed:N`, `delimiter:HEX`, `length:OFFSET:WIDTH:
 - [Workbench guide and Modbus examples](docs/workbench.md)
 - [Recording format, replay, and export](docs/capture.md)
 - [Protocol examples and sample recording](examples/modbus/README.md)
-- [Architecture](docs/architecture.md)
-- [Development plan](PLAN.md)
-- [Release preparation](docs/release.md)
-- [XFER protocol](docs/xfer.md)
 
 Most detailed guides currently use Chinese.
 
@@ -169,7 +165,7 @@ Most detailed guides currently use Chinese.
 
 Bug reports, documentation improvements, and pull requests are welcome. [Open an issue](https://github.com/ZhiWei-Ou/xserial/issues) with your OS, xserial version, serial configuration, reproduction steps, and expected versus actual behavior. For larger changes, describe the proposal in an issue first.
 
-Read [AGENTS.md](AGENTS.md) and the [architecture guide](docs/architecture.md) before changing the code. Keep changes focused, preserve RawUI's byte transparency, and add regression coverage for behavior changes. Keep both README languages in sync.
+Read [AGENTS.md](AGENTS.md) before changing the code. Keep changes focused, preserve RawUI's byte transparency, and add regression coverage for behavior changes. Keep both README languages in sync.
 
 ```bash
 go test ./...

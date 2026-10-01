@@ -1,2 +1,0 @@
-# XFER File Transfer Protocol
-

@@ -158,10 +158,6 @@ xserial /dev/ttyUSB0 9600,8,E,1 --workbench --frame fixed:9
 - [工作台说明与 Modbus 示例](docs/workbench.md)
 - [录制格式、回放与导出](docs/capture.md)
 - [协议示例与录制样本](examples/modbus/README.md)
-- [架构说明](docs/architecture.md)
-- [开发计划](PLAN.md)
-- [发布准备](docs/release.md)
-- [XFER 协议](docs/xfer.md)
 
 详细指南目前以中文为主。
 
@@ -169,7 +165,7 @@ xserial /dev/ttyUSB0 9600,8,E,1 --workbench --frame fixed:9
 
 欢迎问题反馈、文档改进和 Pull Request。[提交 Issue](https://github.com/ZhiWei-Ou/xserial/issues) 时，请提供操作系统、xserial 版本、串口配置、复现步骤，以及预期和实际行为。较大改动建议先通过 Issue 说明方案。
 
-修改代码前，请阅读 [AGENTS.md](AGENTS.md) 和[架构说明](docs/architecture.md)。保持改动聚焦，保留 RawUI 的字节透明契约，为行为变更添加回归测试，并同步维护两种语言的 README。
+修改代码前，请阅读 [AGENTS.md](AGENTS.md)。保持改动聚焦，保留 RawUI 的字节透明契约，为行为变更添加回归测试，并同步维护两种语言的 README。
 
 ```bash
 go test ./...
