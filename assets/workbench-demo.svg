@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="386" viewBox="0 0 1040 386">
+<title>xserial binary workbench demo</title>
+<desc>Actual workbench output from a simulated Modbus register query.</desc>
+<rect width="1040" height="386" rx="12" fill="#080808"/>
+<text x="20" y="29" font-family="monospace" font-size="14" fill="#aaa">xserial demo --snapshot</text>
+<g font-family="DejaVu Sans Mono, monospace" font-size="16" xml:space="preserve">
+<text x="20" y="60"><tspan fill="#f49b67"> xserial DEMO  simulated-device  115200 8/none/1  connected  RX 9  TX 8</tspan><tspan fill="#dddddd"></tspan></text>
+<text x="20" y="83"><tspan fill="#f49b67">────────────────────────────────────────────────────────────────────────────────────────────────────</tspan><tspan fill="#dddddd"></tspan></text>
+<text x="20" y="106"><tspan fill="#ffb86c">11:24:51.716 TX    8 01 03 00 00 00 02 C4 0B                          |........|</tspan><tspan fill="#dddddd"></tspan></text>
+<text x="20" y="129"><tspan fill="#6bcbff">11:24:51.716 RX    9 01 03 04 00 64 00 65 7B C7                       |....d.e{.|</tspan><tspan fill="#dddddd"></tspan></text>
+<text x="20" y="152"><tspan fill="#dddddd"></tspan></text>
+<text x="20" y="175"><tspan fill="#dddddd"></tspan></text>
+<text x="20" y="198"><tspan fill="#dddddd"></tspan></text>
+<text x="20" y="221"><tspan fill="#dddddd"></tspan></text>
+<text x="20" y="244"><tspan fill="#dddddd"></tspan></text>
+<text x="20" y="267"><tspan fill="#f49b67">────────────────────────────────────────────────────────────────────────────────────────────────────</tspan><tspan fill="#dddddd"></tspan></text>
+<text x="20" y="290"><tspan fill="#dddddd"> HEX &gt; 01 03 00 00 00 02 C4 0B│</tspan></text>
+<text x="20" y="313"><tspan fill="#dddddd"> 8 bytes  01 03 00 00 00 02 C4 0B</tspan></text>
+<text x="20" y="336"><tspan fill="#dddddd"> Demo query complete · Tab inspects fields · Ctrl-K appends checksums</tspan></text>
+<text x="20" y="359"><tspan fill="#dddddd"> Enter send  ↑↓ history  Tab inspect  Ctrl-K checksum  Ctrl-P menu  Ctrl-C quit</tspan></text>
+</g>
+</svg>

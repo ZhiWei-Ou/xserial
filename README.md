@@ -1,116 +1,184 @@
 <p align="center">
-  <img src="assets/xserial-logo.svg" width="160" alt="xserial project logo">
+  <img src="assets/xserial-logo.svg" width="160" alt="xserial logo">
 </p>
 
 <h1 align="center">xserial</h1>
 
 <p align="center">
-  A focused, cross-platform serial terminal for device consoles, raw byte streams, and file transfer.
+  A terminal workbench for serial communication and binary protocol debugging.
 </p>
 
-xserial keeps the common path short: list a port, connect to it, and start typing. Its default RawUI behaves like a traditional transparent serial terminal, while the optional full-screen TUI adds an integrated terminal workspace and live serial configuration.
+<p align="center">
+  <a href="https://github.com/ZhiWei-Ou/xserial/releases"><img src="https://img.shields.io/github/v/release/ZhiWei-Ou/xserial?label=version" alt="Latest release"></a>
+  <a href="https://github.com/ZhiWei-Ou/xserial/actions/workflows/ci.yml"><img src="https://github.com/ZhiWei-Ou/xserial/actions/workflows/ci.yml/badge.svg" alt="Build status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
+</p>
+
+<p align="center">
+  <a href="#documentation">Documentation</a> ·
+  <a href="#quick-start">Try the demo</a> ·
+  <a href="https://github.com/ZhiWei-Ou/xserial/issues">Report an issue</a>
+</p>
+
+<p align="center">
+  English · <a href="README_zh.md">简体中文</a>
+</p>
+
+<!-- Replace this placeholder with a screenshot or demo GIF when ready. -->
+<p align="center">
+  <strong>Screenshot / demo GIF</strong><br>
+  <em>Coming soon.</em>
+</p>
 
 ## Features
 
-- Direct connection syntax: `xserial <port> [cfg]`
-- Serial port discovery on Linux, macOS, and Windows
-- Byte-transparent RawUI with local commands on `stderr`
-- Full-screen TUI with terminal rendering, connection status, statistics, and editable serial settings
-- Single-file YMODEM transfer
-- Receive logging, optional line timestamps, and automatic background reconnection
-- Shell completion for Bash, Zsh, Fish, and PowerShell
+- **Send and inspect bytes.** Edit validated Hex input and compare TX/RX with timestamps, lengths, Hex, and ASCII. Reuse sending history and named command favorites.
+- **Understand binary fields.** Select bytes to inspect integers and floating-point values in both byte orders. Preview, append, and verify CRC16 Modbus, SUM8, and XOR8 checksums.
+- **Reassemble responses.** Choose fixed-length, delimiter, length-field, or Modbus register-response framing to handle split and joined reads.
+- **Debug offline.** Record original RX/TX bytes and connection events, then replay, search, mark, and export a conversation after the device is disconnected.
+- **Try it without hardware.** The built-in simulated device demonstrates normal responses, bad CRCs, split responses, and joined responses through the same workbench.
+- **Keep a classic serial terminal.** Use byte-transparent RawUI or the full-screen terminal UI, with automatic reconnection, receive logging, timestamps, and single-file YMODEM transfer. Supports Linux, macOS, and Windows.
 
-## Install
+## Quick Start
 
-```bash
-go install github.com/ZhiWei-Ou/xserial/cmd/xserial@latest
-```
-
-Make sure the Go bin directory is available in your `PATH`, then verify the installation:
+Run the hardware-free demo from source with Go 1.26.2 or newer:
 
 ```bash
-xserial version
+git clone https://github.com/ZhiWei-Ou/xserial.git
+cd xserial
+go run ./cmd/xserial demo --frame modbus-read
 ```
 
-## Quick start
+Press **Enter** to query two simulated registers. Press **Tab** to inspect the response, or **Ctrl-C** to quit. For a non-interactive preview, run `go run ./cmd/xserial demo --snapshot`.
 
-List available serial ports:
+The workbench changes have not been published as a release yet. Use the current source checkout to try them. Prebuilt binaries will be available on the [Releases page](https://github.com/ZhiWei-Ou/xserial/releases) after publication.
+
+To build a local executable, run `make build`; it writes the binary to `bin/`. The examples below assume `xserial` is on your `PATH`. You can also replace `xserial` with `go run ./cmd/xserial` from the repository root.
+
+## Usage
+
+### Connect to a device console
 
 ```bash
 xserial list
-```
-
-Connect with the default `115200,8,N,1` configuration:
-
-```bash
 xserial /dev/ttyUSB0
-```
-
-Use a different baud rate or frame configuration:
-
-```bash
-xserial /dev/ttyUSB0 9600
 xserial /dev/ttyUSB0 9600,7,E,2
 ```
 
-The optional configuration follows:
+RawUI sends keyboard input directly to the device and writes received bytes unchanged to `stdout`. Local messages use `stderr`. Press `Ctrl-P h` for local commands or `Ctrl-P q` to quit.
 
-```text
-baud[,data-bits[,parity[,stop-bits]]]
-```
+On macOS, use a device such as `/dev/cu.usbserial-0001`; on Windows, use a COM name such as `COM3`.
 
-Open the full-screen interface:
+For a full-screen device console with an editable configuration sidebar:
 
 ```bash
 xserial /dev/ttyUSB0 --TUI
 ```
 
-On macOS, ports commonly look like `/dev/cu.usbserial-0001`. On Windows, use the COM name directly, for example `xserial COM3`.
+This terminal UI is Beta. Press `Ctrl-P` for commands, `Ctrl-P c` to focus configuration, and `Ctrl-C` to quit.
 
-## Interfaces
-
-RawUI is the default. Keyboard input is sent directly to the device, and received bytes are written to `stdout` without local UI output mixed into the stream. Startup and background reconnection are silent. Press `Ctrl-P i` to show the connection configuration, `Ctrl-P h` for local commands or `Ctrl-P q` to leave the session.
-
-The full-screen TUI is Beta and unstable. It provides a terminal workspace, connection statistics, a command palette, and an editable configuration sidebar. Use `Ctrl-P` for commands, `Ctrl-P c` to focus serial configuration, and `Ctrl-C` to quit.
-
-## Hexdump output
-
-Display received bytes as offset, hexadecimal bytes, and ASCII (similar to `hexdump -C`):
+### Debug a binary protocol
 
 ```bash
-xserial /dev/ttyUSB0 -h
+xserial /dev/ttyUSB0 --workbench
+xserial demo --frame modbus-read --commands examples/modbus/commands.json
+```
+
+Paste `AA 01`, `AA01`, `AA,01`, or `0xAA 0x01`; sending only happens when you press Enter. The demo favorites include all four response scenarios.
+
+| Key | Action |
+| --- | --- |
+| Enter | Send the current Hex command |
+| Up / Down | Browse successful sends |
+| Ctrl-S / Ctrl-O | Save / load a named command |
+| Tab | Inspect traffic bytes |
+| Left / Right, `[` / `]` | Select byte offset and width in the inspector |
+| Ctrl-K | Preview and append a checksum |
+| Ctrl-F / Ctrl-B | Search Hex bytes / mark selected traffic |
+| Page Up / Page Down, End | Browse traffic / follow the latest data |
+| Ctrl-P / Ctrl-C | Open the command menu / quit |
+
+RX remains a **data block** unless a framing rule is explicitly selected. Device control bytes are shown as data and never executed by the workbench. `modbus-read` uses response structure; it does not implement RTU timing or a complete Modbus master.
+
+### Record, replay, and export
+
+```bash
+xserial /dev/ttyUSB0 --workbench --record session.xsr
+xserial replay session.xsr --frame modbus-read
+xserial export session.xsr --match "00 64"
+xserial export session.xsr --from 2s --to 10s --format jsonl -o excerpt.xsr
+```
+
+Replay runs offline and never opens a serial port. Space pauses, `+` / `-` changes speed, and R restarts. Search and inspection stay available after playback ends.
+
+Live marks are saved in the recording; replay marks use a `.marks.json` sidecar. Exports include saved sidecar notes. Recording and export commands create new files and refuse to overwrite existing ones.
+
+### View Hexdump and receive logs
+
+```bash
 xserial /dev/ttyUSB0 --hexdump --time
+xserial /dev/ttyUSB0 --log device.log --time
 ```
 
-Each received chunk is printed immediately in rows of up to 16 bytes, with continuous byte offsets and CRLF line endings. `--time` prefixes each dump row. Keyboard input and receive logging keep their existing behavior. Hexdump is available in RawUI and cannot be combined with `--TUI`. Use `--help` for CLI help; `-h` selects hexdump.
+Hexdump displays offsets, Hex, and ASCII in RawUI. Receive logs append device output to a file. `--time` adds `HH:MM:SS.mmm` timestamps to received lines or dump rows.
 
-## Logging and timestamps
+## Configuration
 
-Append received data to a file:
+The connection syntax is `xserial <port> [cfg]`. Omitted trailing fields use the defaults `115200,8,N,1`:
+
+```text
+baud[,data-bits[,parity[,stop-bits]]]
+```
 
 ```bash
-xserial /dev/ttyUSB0 --log device.log
+xserial /dev/ttyUSB0 115200
+xserial /dev/ttyUSB0 9600,8,E,1 --workbench --frame fixed:9
 ```
 
-Add timestamps with `-t` or `--time`. The format is fixed to `HH:MM:SS.mmm`:
+Parity accepts `N`, `O`, `E`, `M`, or `S`; stop bits accept `1`, `1.5`, or `2`.
 
-```bash
-xserial /dev/ttyUSB0 --time
-xserial /dev/ttyUSB0 --log device.log -t
-```
+| Option | Purpose |
+| --- | --- |
+| `--workbench` | Binary protocol debugging workbench |
+| `--TUI` | Full-screen device console; Beta |
+| `--commands <file>` | Workbench command favorites; defaults to the user config directory's `xserial/commands.json` |
+| `--frame <rule>` | Workbench RX framing; default `chunk` |
+| `--record <file>` | Original RX/TX and connection-event recording |
+| `--hexdump`, `-h` | Hex and ASCII output in RawUI |
+| `--log <file>` | Append received data to a file |
+| `--time`, `-t` | Receive timestamps in RawUI and the terminal UI |
+
+Framing rules include `chunk`, `fixed:N`, `delimiter:HEX`, `length:OFFSET:WIDTH:OVERHEAD:le|be`, and `modbus-read`. See the [workbench guide](docs/workbench.md) for their exact semantics.
+
+`--workbench`, `--TUI`, and `--hexdump` are mutually exclusive. Use `--help` for CLI help; `-h` selects Hexdump. `xserial version` prints the version; `xserial --version` also shows available build metadata.
 
 ## Documentation
 
-- [Chinese introduction](docs/introduction.md)
+- [Chinese README](README_zh.md)
+- [Workbench guide and Modbus examples](docs/workbench.md)
+- [Recording format, replay, and export](docs/capture.md)
+- [Protocol examples and sample recording](examples/modbus/README.md)
 - [Architecture](docs/architecture.md)
+- [Development plan](PLAN.md)
+- [Release preparation](docs/release.md)
 - [XFER protocol](docs/xfer.md)
 
-## Development
+Most detailed guides currently use Chinese.
+
+## Contributing
+
+Bug reports, documentation improvements, and pull requests are welcome. [Open an issue](https://github.com/ZhiWei-Ou/xserial/issues) with your OS, xserial version, serial configuration, reproduction steps, and expected versus actual behavior. For larger changes, describe the proposal in an issue first.
+
+Read [AGENTS.md](AGENTS.md) and the [architecture guide](docs/architecture.md) before changing the code. Keep changes focused, preserve RawUI's byte transparency, and add regression coverage for behavior changes. Keep both README languages in sync.
 
 ```bash
 go test ./...
+go test -race ./...
+make all
 ```
 
-## Version information
+Run the unit tests for every change, the race tests for concurrent code, and the relevant cross-builds for platform changes. `make all` builds Linux, macOS, and Windows binaries for amd64 and arm64.
 
-`xserial version` prints the short version. Use `xserial -v` or `xserial --version` for a concise summary from Go's `runtime/debug.ReadBuildInfo`: module version, Go version, target platform, commit, commit time, and modified status. Only available fields are shown. Development module versions remain `(devel)`; missing metadata is not inferred from Git or the injected release version.
+## License
+
+Licensed under the [MIT License](LICENSE).
