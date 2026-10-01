@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/xserial-logo.svg" width="160" alt="xserial 标志">
+  <img src="assets/xserial-logo.png" width="160" alt="xserial 标志">
 </p>
 
 <h1 align="center">xserial</h1>
