@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"testing"
 	"time"
 
@@ -14,6 +15,9 @@ type testCaller struct{}
 
 func (testCaller) Call(_ context.Context, op string, input, output any) error {
 	if op == "send" {
+		if input.(debugsession.SendInput).Data == "lost" {
+			return io.EOF
+		}
 		out := output.(*debugsession.SendResult)
 		*out = debugsession.SendResult{SessionID: "s", Cursor: "s:0", Delivery: "unknown"}
 		return &debugsession.Fault{Code: "device_error", Message: "partial write"}
@@ -45,7 +49,7 @@ func TestMCPToolsSchemasResultsAndWriteFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 6 {
+	if len(tools.Tools) != 3 {
 		t.Fatalf("tools = %d", len(tools.Tools))
 	}
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "serial_read", Arguments: map[string]any{"session_id": "s", "wait_ms": 0}})
@@ -74,6 +78,17 @@ func TestMCPToolsSchemasResultsAndWriteFailure(t *testing.T) {
 	}
 	if sent.Cursor != "s:0" || sent.Delivery != "unknown" {
 		t.Fatalf("send failure lost checkpoint: %+v", sent)
+	}
+	lost, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "serial_send", Arguments: map[string]any{"session_id": "s", "data": "lost"}})
+	if err != nil || !lost.IsError {
+		t.Fatalf("lost response = %+v, %v", lost, err)
+	}
+	data, _ = json.Marshal(lost.StructuredContent)
+	if err := json.Unmarshal(data, &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent.SessionID != "s" || sent.Delivery != "unknown" {
+		t.Fatalf("lost IPC confirmation = %+v", sent)
 	}
 	invalid, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "serial_read", Arguments: map[string]any{}})
 	if err == nil && !invalid.IsError {

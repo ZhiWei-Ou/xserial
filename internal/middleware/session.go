@@ -10,6 +10,7 @@ import (
 
 	"github.com/ZhiWei-Ou/xserial/internal/backend"
 	"github.com/ZhiWei-Ou/xserial/internal/capture"
+	"github.com/ZhiWei-Ou/xserial/internal/debugsession"
 	"github.com/ZhiWei-Ou/xserial/internal/linetime"
 	"github.com/ZhiWei-Ou/xserial/internal/logging"
 	"github.com/ZhiWei-Ou/xserial/internal/transfer"
@@ -114,6 +115,9 @@ type Frontend interface {
 }
 
 type Config struct {
+	Connection        ConnectionConfig
+	Debug             *debugsession.Session
+	RemoteAudit       io.Writer
 	Port              SerialPort
 	Reconnect         func() (SerialPort, error)
 	ReconnectInterval time.Duration
@@ -143,6 +147,11 @@ type endpoint struct {
 	pipeline       *Pipeline
 	openConnection func(ConnectionConfig) (SerialPort, error)
 
+	// A sender owns the gate for one whole request. Waiting senders can cancel;
+	// configuration and transfer startup use the same gate. It is never closed.
+	sendGate            chan struct{}
+	debug               *debugsession.Session
+	remoteAudit         io.Writer
 	mu                  sync.Mutex
 	stopping            bool
 	transferActive      bool
@@ -182,20 +191,44 @@ func (g *transferGate) HandleInbound(ctx context.Context, envelope Envelope) (Ac
 }
 
 func (e *endpoint) Send(ctx context.Context, data []byte) error {
-	e.markReady()
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.stopping {
+	return e.send(ctx, data, 0, nil, "frontend")
+}
+
+func (e *endpoint) acquireSend(ctx context.Context) error {
+	select {
+	case e.sendGate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-e.ctx.Done():
 		return context.Canceled
 	}
-	if e.transferActive {
+}
+
+func (e *endpoint) send(ctx context.Context, data []byte, generation uint64, checkpoint func(), source string) error {
+	e.markReady()
+	if err := e.acquireSend(ctx); err != nil {
+		return err
+	}
+	defer func() { <-e.sendGate }()
+	e.mu.Lock()
+	stopping, busy := e.stopping, e.transferActive
+	e.mu.Unlock()
+	if stopping {
+		return context.Canceled
+	}
+	if busy {
 		return ErrTransferActive
 	}
-	return e.write(ctx, data)
+	return e.writeFromGeneration(ctx, source, data, generation, checkpoint)
 }
 
 func (e *endpoint) Configure(ctx context.Context, cfg ConnectionConfig) error {
 	e.markReady()
+	if err := e.acquireSend(ctx); err != nil {
+		return err
+	}
+	defer func() { <-e.sendGate }()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.stopping {
@@ -209,6 +242,9 @@ func (e *endpoint) Configure(ctx context.Context, cfg ConnectionConfig) error {
 	}
 	return e.backend.Reconfigure(ctx, func() (backend.Port, error) {
 		port, err := e.openConnection(cfg)
+		if err == nil && e.debug != nil {
+			e.debug.SetConfig(debugConnection(cfg))
+		}
 		if err == nil && e.recorder != nil {
 			return &capture.Port{ReadWriteCloser: port, Recorder: e.recorder}, nil
 		}
@@ -216,15 +252,11 @@ func (e *endpoint) Configure(ctx context.Context, cfg ConnectionConfig) error {
 	})
 }
 
-func (e *endpoint) write(ctx context.Context, data []byte) error {
-	return e.writeFrom(ctx, "frontend", data)
-}
-
 func (e *endpoint) writeTransfer(ctx context.Context, data []byte) error {
-	return e.writeFrom(ctx, "transfer.active", data)
+	return e.writeFromGeneration(ctx, "transfer.active", data, 0, nil)
 }
 
-func (e *endpoint) writeFrom(ctx context.Context, source string, data []byte) error {
+func (e *endpoint) writeFromGeneration(ctx context.Context, source string, data []byte, generation uint64, checkpoint func()) error {
 	envelope, err := e.pipeline.ProcessOutbound(ctx, Envelope{
 		Data: data, Source: source, At: time.Now(),
 	})
@@ -239,7 +271,20 @@ func (e *endpoint) writeFrom(ctx context.Context, source string, data []byte) er
 		e.cancel()
 		return err
 	}
-	sendErr := e.backend.Send(ctx, envelope.Data)
+	var sendErr error
+	if generation == 0 {
+		sendErr = e.backend.Send(ctx, envelope.Data)
+	} else {
+		sendErr = e.backend.SendGeneration(ctx, generation, envelope.Data, checkpoint)
+	}
+	if errors.Is(sendErr, backend.ErrStaleConnection) {
+		if generation == 0 {
+			// Frontends already handle ErrDisconnected while waiting to reconnect.
+			sendErr = fmt.Errorf("%w: %w", ErrDisconnected, sendErr)
+		} else {
+			sendErr = &debugsession.Fault{Code: "detached", Message: sendErr.Error()}
+		}
+	}
 	result := capture.Record{Kind: "tx_complete", Request: request}
 	if sendErr != nil {
 		result.Kind = "tx_failed"
@@ -270,6 +315,10 @@ func (e *endpoint) StartYMODEMDownload(ctx context.Context, dir string) error {
 }
 
 func (e *endpoint) startTransfer(ctx context.Context, run func(context.Context)) error {
+	if err := e.acquireSend(ctx); err != nil {
+		return err
+	}
+	defer func() { <-e.sendGate }()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -474,7 +523,13 @@ func (s *Session) Run(parent context.Context) error {
 		_ = pipeline.Close(context.Background())
 		return err
 	}
+	var observer backend.Observer
+	if s.cfg.Debug != nil {
+		s.cfg.Debug.SetConfig(debugConnection(s.cfg.Connection))
+		observer = s.cfg.Debug
+	}
 	backendSession := backend.New(backend.Config{
+		Observer:          observer,
 		Port:              port,
 		Reconnect:         reconnect,
 		ReconnectInterval: s.cfg.ReconnectInterval,
@@ -494,10 +549,14 @@ func (s *Session) Run(parent context.Context) error {
 		return errors.Join(normalizeRunError(err), pipeline.Close(context.Background()))
 	}
 	e := &endpoint{
-		ctx: ctx, cancel: cancel, events: make(chan Event, 32), logger: s.cfg.Logger,
+		sendGate: make(chan struct{}, 1), debug: s.cfg.Debug, remoteAudit: s.cfg.RemoteAudit, ctx: ctx, cancel: cancel, events: make(chan Event, 32), logger: s.cfg.Logger,
 		ready: make(chan struct{}), backend: backendEndpoint, pipeline: pipeline,
 		openConnection: s.cfg.OpenConnection,
 		recorder:       s.cfg.Recorder,
+	}
+	if s.cfg.Debug != nil {
+		s.cfg.Debug.SetSender(e.sendRemote)
+		defer s.cfg.Debug.SetSender(nil)
 	}
 	dispatcherDone := make(chan error, 1)
 	go func() { dispatcherDone <- s.runBackendEvents(ctx, e) }()
@@ -533,6 +592,10 @@ func (s *Session) Run(parent context.Context) error {
 		}
 	}
 	e.workers.Wait()
+	// Cancellation unblocks the backend call. Wait for its caller to record the
+	// outcome before closing the pipeline and appending the final journal event.
+	e.sendGate <- struct{}{}
+	<-e.sendGate
 	if err := pipeline.Close(context.Background()); runErr == nil {
 		runErr = err
 	}

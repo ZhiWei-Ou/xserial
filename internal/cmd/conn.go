@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ZhiWei-Ou/xserial/internal/capture"
+	"github.com/ZhiWei-Ou/xserial/internal/debugsession"
 	"github.com/ZhiWei-Ou/xserial/internal/hexdata"
 	"github.com/ZhiWei-Ou/xserial/internal/logging"
 	session "github.com/ZhiWei-Ou/xserial/internal/middleware"
@@ -23,6 +24,7 @@ import (
 )
 
 type connOptions struct {
+	stateDir      string
 	port          string
 	baud          int
 	dataBits      int
@@ -39,6 +41,7 @@ type connOptions struct {
 }
 
 type connFlags struct {
+	stateDir      string
 	logPath       string
 	showTime      bool
 	useTUI        bool
@@ -55,6 +58,7 @@ const (
 )
 
 func bindConnFlags(cmd *cobra.Command, flags *connFlags) {
+	cmd.Flags().StringVar(&flags.stateDir, "state-dir", "", "private state directory for MCP session discovery")
 	cmd.Flags().Bool("help", false, "help for xserial")
 	cmd.Flags().BoolVarP(&flags.hexdump, "hexdump", "h", false, "display received bytes as a hex and ASCII dump")
 	cmd.Flags().StringVar(&flags.logPath, "log", "", "append received bytes to file")
@@ -233,7 +237,18 @@ func runConn(ctx context.Context, opts connOptions) (runErr error) {
 		})
 	}
 
+	debug := debugsession.New(debugsession.Connection{})
+	publication, publishErr := publishTerminal(ctx, opts.stateDir, false, debug)
+	if publishErr != nil {
+		logger.Warn("mcp.publish_failed", "error", publishErr)
+	}
+	defer func() { runErr = errors.Join(runErr, closePublication(publication)) }()
+	var remoteAudit io.Writer
+	if !opts.workbench && !opts.tui {
+		remoteAudit = logger
+	}
 	s := session.New(session.Config{
+		Connection: connectionConfig, Debug: debug, RemoteAudit: remoteAudit,
 		Port:              port,
 		Reconnect:         openPort,
 		ReconnectInterval: time.Second,

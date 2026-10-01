@@ -33,7 +33,7 @@ https://github.com/user-attachments/assets/91dca830-0c6a-41ba-96f0-97ad97430697
 
 ## 核心功能
 
-- **让 coding agent 调试设备。** MCP 提供持续连接的串口终端、精确字节发送和带游标的有限等待读取；本地唯一 daemon 在客户端重启后保留连接。
+- **让 coding agent 调试设备。** MCP 接入正在运行的串口终端，提供精确字节发送和带游标的有限等待读取；本地唯一 HTTP daemon 发现会话，终端连接与历史在 MCP 重启后仍然保留。
 
 - **发送与观察字节。** 编辑经过校验的 Hex 输入，对照带时间、长度、Hex 和 ASCII 的 TX/RX，复用发送历史与命令收藏。
 - **理解二进制字段。** 选中字节，查看大小端整数与浮点数；预览、追加和检查 CRC16 Modbus、SUM8、XOR8 校验。

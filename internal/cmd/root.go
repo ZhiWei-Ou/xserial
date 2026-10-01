@@ -59,6 +59,7 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			opts.stateDir = flags.stateDir
 			opts.hexdump = flags.hexdump
 			opts.workbench = flags.workbench
 			opts.favoritesPath = flags.favoritesPath

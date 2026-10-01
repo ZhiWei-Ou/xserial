@@ -6,41 +6,20 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/rpc"
-	"os"
-	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/ZhiWei-Ou/xserial/internal/debugsession"
+	"github.com/ZhiWei-Ou/xserial/internal/mcpserver"
 )
 
-func Run(ctx context.Context, opts Options, deps debugsession.Dependencies) error {
-	dir, err := StateDirectory(opts.StateDir, opts.Demo)
-	if err != nil {
-		return err
-	}
-	lock, err := acquire(filepath.Join(dir, "daemon.lock"))
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return err
-	}
-	defer listener.Close()
-	meta := metadata{protocolVersion, listener.Addr().String(), randomToken(), os.Getpid(), opts.Demo, opts.Version}
-	if err := writeMetadata(dir, meta); err != nil {
-		return err
-	}
-	defer os.Remove(filepath.Join(dir, "endpoint.json"))
-	ctx, stop := context.WithCancel(ctx)
-	defer stop()
-	service := debugsession.New(ctx, deps)
+// serveRPC authenticates local peers before exposing operations. It cancels
+// handlers on EOF and waits for them on shutdown; closing it never closes serial I/O.
+func serveRPC(ctx context.Context, listener net.Listener, token string, caller Caller, stop context.CancelFunc, allowStop bool) error {
 	connections := make(map[net.Conn]struct{})
 	var mu sync.Mutex
 	var workers sync.WaitGroup
@@ -78,31 +57,32 @@ func Run(ctx context.Context, opts Options, deps debugsession.Dependencies) erro
 			defer conn.Close()
 			defer func() { mu.Lock(); delete(connections, conn); mu.Unlock() }()
 			_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
-			var token [64]byte
-			if _, err := io.ReadFull(conn, token[:]); err != nil || subtle.ConstantTimeCompare(token[:], []byte(meta.Token)) != 1 {
+			var credential [64]byte
+			if _, err := io.ReadFull(conn, credential[:]); err != nil || subtle.ConstantTimeCompare(credential[:], []byte(token)) != 1 {
 				return
 			}
 			if _, err := conn.Write([]byte{1}); err != nil {
 				return
 			}
 			_ = conn.SetDeadline(time.Time{})
-			owner := rand.Text()
 			clientCtx, cancel := context.WithCancel(ctx)
 			defer cancel()
-			peer := &peer{ctx: clientCtx, service: service, owner: owner, stop: stop,
-				active: make(map[uint64]context.CancelFunc), canceled: make(map[uint64]bool), finished: make(map[uint64]bool)}
+			p := &peer{clientID: rand.Text(), ctx: clientCtx, service: caller, active: make(map[uint64]context.CancelFunc), canceled: make(map[uint64]bool), finished: make(map[uint64]bool)}
+			if allowStop {
+				p.stop = stop
+			}
 			server := rpc.NewServer()
-			if err := server.RegisterName("Device", peer); err != nil {
+			if err := server.RegisterName("Device", p); err != nil {
 				return
 			}
 			server.ServeConn(&watchedConn{Conn: conn, cancel: cancel})
-			service.Release(owner)
 		}()
 	}
+	// The owner cancels before closing listener, including on an accept failure.
 	stop()
 	<-watcherDone
 	workers.Wait()
-	return errors.Join(acceptErr, service.Shutdown())
+	return acceptErr
 }
 
 // net/rpc waits for handlers before ServeConn returns. Cancel when its reader
@@ -121,9 +101,9 @@ func (c *watchedConn) Read(data []byte) (int, error) {
 }
 
 type peer struct {
+	clientID        string
 	ctx             context.Context
-	service         *debugsession.Service
-	owner           string
+	service         Caller
 	stop            context.CancelFunc
 	mu              sync.Mutex
 	active          map[uint64]context.CancelFunc
@@ -133,7 +113,14 @@ type peer struct {
 }
 
 func (p *peer) Call(req Request, reply *Reply) error {
-	ctx, cancel := context.WithCancel(p.ctx)
+	clientID, requestID := req.ClientID, req.RequestID
+	if clientID == "" {
+		clientID = p.clientID
+	}
+	if requestID == "" {
+		requestID = strconv.FormatUint(req.ID, 10)
+	}
+	ctx, cancel := context.WithCancel(mcpserver.WithIdentity(p.ctx, clientID, requestID))
 	p.mu.Lock()
 	p.active[req.ID] = cancel
 	if p.canceled[req.ID] {
@@ -152,11 +139,13 @@ func (p *peer) Call(req Request, reply *Reply) error {
 		}
 		p.mu.Unlock()
 	}()
-	output, err := p.dispatch(ctx, req)
-	if output != nil {
-		var encodeErr error
-		reply.Output, encodeErr = json.Marshal(output)
-		err = errors.Join(err, encodeErr)
+	var err error
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	} else if req.Operation == "stop" && p.stop != nil {
+		p.stop()
+	} else {
+		err = p.service.Call(ctx, req.Operation, req.Input, &reply.Output)
 	}
 	if err != nil {
 		var fault *debugsession.Fault
@@ -195,45 +184,4 @@ func decode[T any](raw json.RawMessage) (T, error) {
 		return value, &debugsession.Fault{Code: "invalid_argument", Message: err.Error()}
 	}
 	return value, nil
-}
-
-func (p *peer) dispatch(ctx context.Context, req Request) (any, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	switch req.Operation {
-	case "list":
-		return p.service.List()
-	case "status":
-		return p.service.Status(p.owner), nil
-	case "open":
-		in, err := decode[debugsession.Connection](req.Input)
-		if err != nil {
-			return nil, err
-		}
-		return p.service.Open(ctx, p.owner, in)
-	case "send":
-		in, err := decode[debugsession.SendInput](req.Input)
-		if err != nil {
-			return nil, err
-		}
-		return p.service.Send(ctx, p.owner, in)
-	case "read":
-		in, err := decode[debugsession.ReadInput](req.Input)
-		if err != nil {
-			return nil, err
-		}
-		return p.service.Read(ctx, in)
-	case "close":
-		in, err := decode[debugsession.SessionInput](req.Input)
-		if err != nil {
-			return nil, err
-		}
-		return p.service.Close(ctx, p.owner, in)
-	case "stop":
-		p.stop()
-		return struct{}{}, nil
-	default:
-		return nil, fmt.Errorf("unknown daemon operation %q", req.Operation)
-	}
 }

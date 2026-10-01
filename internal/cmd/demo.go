@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 
+	"github.com/ZhiWei-Ou/xserial/internal/debugsession"
 	"github.com/ZhiWei-Ou/xserial/internal/demo"
 	"github.com/ZhiWei-Ou/xserial/internal/hexdata"
 	"github.com/ZhiWei-Ou/xserial/internal/middleware"
@@ -12,6 +13,7 @@ import (
 )
 
 func newDemoCommand() *cobra.Command {
+	var stateDir string
 	var commandsPath string
 	var frameRule string
 	var recordPath string
@@ -47,11 +49,21 @@ func newDemoCommand() *cobra.Command {
 			if snapshot {
 				frontend = workbench.NewPreview(workbenchConfig)
 			}
-			return middleware.New(middleware.Config{Port: port, Frontend: frontend, Recorder: recorder}).Run(cmd.Context())
+			debug := debugsession.New(debugsession.Connection{})
+			if !snapshot {
+				publication, err := publishTerminal(cmd.Context(), stateDir, true, debug)
+				if err != nil {
+					_ = port.Close()
+					return err
+				}
+				defer func() { runErr = errors.Join(runErr, closePublication(publication)) }()
+			}
+			return middleware.New(middleware.Config{Port: port, Connection: cfg, Debug: debug, Frontend: frontend, Recorder: recorder}).Run(cmd.Context())
 		},
 	}
 	cmd.SetIn(os.Stdin)
 	cmd.SetOut(os.Stdout)
+	cmd.Flags().StringVar(&stateDir, "state-dir", "", "private demo state directory for MCP session discovery")
 	cmd.Flags().StringVar(&commandsPath, "commands", "", "command favorites JSON file")
 	cmd.Flags().StringVar(&frameRule, "frame", "chunk", "RX framing rule; modbus-read reassembles the example responses")
 	cmd.Flags().StringVar(&recordPath, "record", "", "record the demo to a new .xsr file")

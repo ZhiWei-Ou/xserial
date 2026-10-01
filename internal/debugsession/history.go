@@ -16,14 +16,15 @@ import (
 // One session collector appends. Readers observe snapshots without consuming
 // bytes. Closing changed wakes every reader; its replacement is never sent to.
 type history struct {
-	mu       sync.Mutex
-	id       string
-	data     []byte
-	end      uint64
-	lastData time.Time
-	state    string
-	err      string
-	changed  chan struct{}
+	mu         sync.Mutex
+	id         string
+	connection Connection // Immutable identity/configuration snapshot.
+	data       []byte
+	end        uint64
+	lastData   time.Time
+	state      string
+	err        string
+	changed    chan struct{}
 }
 
 func newHistory(id string, capacity int) *history {
@@ -133,6 +134,8 @@ func (h *history) read(ctx context.Context, in ReadInput) (ReadResult, error) {
 		h.mu.Unlock()
 		now := time.Now()
 		switch {
+		case result.State == "detached":
+			result.Reason = "detached"
 		case lost > 0:
 			result.Reason = "gap"
 		case n == maxBytes:

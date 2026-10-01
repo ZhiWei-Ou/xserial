@@ -13,6 +13,7 @@ import (
 )
 
 var ErrDisconnected = errors.New("serial port is disconnected")
+var ErrStaleConnection = errors.New("serial connection changed before writing")
 
 const DefaultReconnectInterval = time.Second
 
@@ -42,7 +43,14 @@ type Reconnected struct{ Attempt int }
 
 func (Reconnected) isBackendEvent() {}
 
+type Observer interface {
+	ConnectionChanged(uint64, bool)
+	Received(uint64, []byte)
+	Written(uint64, int)
+}
+
 type Config struct {
+	Observer          Observer
 	Port              Port
 	Reconnect         func() (Port, error)
 	ReconnectInterval time.Duration
@@ -53,8 +61,13 @@ type Session struct{ cfg Config }
 func New(cfg Config) *Session { return &Session{cfg: cfg} }
 
 type writeRequest struct {
-	data []byte
-	done chan error
+	ctx          context.Context
+	generation   uint64
+	checkpoint   func()
+	checkpointMu sync.Mutex
+	active       bool
+	data         []byte
+	done         chan error
 }
 type reconfigureRequest struct {
 	open func() (Port, error)
@@ -69,18 +82,27 @@ type Endpoint struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	events      chan Event
-	writes      chan writeRequest
+	writes      chan *writeRequest
 	reconfigure chan reconfigureRequest
 
 	portMu     sync.RWMutex
 	port       Port
 	generation uint64
+	observer   Observer
 }
 
 func (e *Endpoint) Events() <-chan Event { return e.events }
 
 func (e *Endpoint) Send(ctx context.Context, data []byte) error {
-	req := writeRequest{data: append([]byte(nil), data...), done: make(chan error, 1)}
+	_, generation := e.connection()
+	return e.SendGeneration(ctx, generation, data, nil)
+}
+
+// A queued request carries the connection generation it was submitted against.
+// Validate it in runWriter, never only at enqueue time.
+func (e *Endpoint) SendGeneration(ctx context.Context, generation uint64, data []byte, checkpoint func()) error {
+	req := &writeRequest{ctx: ctx, generation: generation, data: append([]byte(nil), data...), done: make(chan error, 1), checkpoint: checkpoint, active: true}
+	defer func() { req.checkpointMu.Lock(); req.active = false; req.checkpointMu.Unlock() }()
 	select {
 	case e.writes <- req:
 	case <-ctx.Done():
@@ -131,6 +153,9 @@ func (e *Endpoint) connection() (Port, uint64) {
 func (e *Endpoint) setConnection(port Port, generation uint64) {
 	e.portMu.Lock()
 	e.port, e.generation = port, generation
+	if e.observer != nil {
+		e.observer.ConnectionChanged(generation, port != nil)
+	}
 	e.portMu.Unlock()
 }
 
@@ -150,13 +175,14 @@ func (s *Session) Run(parent context.Context, ready chan<- *Endpoint) error {
 	ctx, cancel := context.WithCancel(parent)
 	e := &Endpoint{
 		ctx: ctx, cancel: cancel, events: make(chan Event, 32),
-		writes: make(chan writeRequest), reconfigure: make(chan reconfigureRequest),
+		observer: s.cfg.Observer, writes: make(chan *writeRequest), reconfigure: make(chan reconfigureRequest),
 	}
 	e.setConnection(&ownedPort{Port: s.cfg.Port}, 1)
 	select {
 	case ready <- e:
 	case <-ctx.Done():
 		cancel()
+		e.setConnection(nil, 1)
 		if err := s.cfg.Port.Close(); err != nil {
 			return fmt.Errorf("close serial port: %w", err)
 		}
@@ -205,12 +231,32 @@ func (s *Session) runWriter(ctx context.Context, e *Endpoint, failures chan<- co
 		case <-ctx.Done():
 			return context.Canceled
 		case req := <-e.writes:
-			port, generation := e.connection()
+			if err := req.ctx.Err(); err != nil {
+				req.done <- err
+				continue
+			}
+			e.portMu.RLock()
+			port, generation := e.port, e.generation
+			if generation != req.generation {
+				e.portMu.RUnlock()
+				req.done <- ErrStaleConnection
+				continue
+			}
+			req.checkpointMu.Lock()
+			if req.active && req.checkpoint != nil && port != nil {
+				req.checkpoint()
+			}
+			req.checkpointMu.Unlock()
+			e.portMu.RUnlock()
 			if port == nil {
 				req.done <- ErrDisconnected
 				continue
 			}
-			if err := transfer.WriteFull(port, req.data); err != nil {
+			if err := transfer.WriteFull(&observedWriter{ctx: req.ctx, port: port, observer: e.observer, generation: generation}, req.data); err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					req.done <- err
+					continue
+				}
 				req.done <- fmt.Errorf("%w: %w", ErrDisconnected, err)
 				if errors.Is(err, capture.ErrRecording) {
 					return err
@@ -306,8 +352,13 @@ func (s *Session) startReader(ctx context.Context, e *Endpoint, port Port, gener
 		buf := make([]byte, 4096)
 		for {
 			n, err := port.Read(buf)
-			if n > 0 && !e.emit(Received{Data: append([]byte(nil), buf[:n]...), At: time.Now()}) {
-				return
+			if n > 0 {
+				if e.observer != nil {
+					e.observer.Received(generation, buf[:n])
+				}
+				if !e.emit(Received{Data: append([]byte(nil), buf[:n]...), At: time.Now()}) {
+					return
+				}
 			}
 			if err != nil {
 				select {
@@ -366,4 +417,23 @@ func normalizeError(err error) error {
 		return nil
 	}
 	return err
+}
+
+// Counts actual short writes, including partial failures and transfer traffic.
+type observedWriter struct {
+	ctx        context.Context
+	port       Port
+	observer   Observer
+	generation uint64
+}
+
+func (w *observedWriter) Write(data []byte) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := w.port.Write(data)
+	if n > 0 && w.observer != nil {
+		w.observer.Written(w.generation, n)
+	}
+	return n, err
 }

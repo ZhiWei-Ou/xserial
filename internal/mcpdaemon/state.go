@@ -1,4 +1,5 @@
-// Package mcpdaemon owns the per-user device service and authenticated local IPC.
+// Package mcpdaemon discovers terminal-owned sessions and routes MCP requests
+// over authenticated local IPC.
 package mcpdaemon
 
 import (
@@ -8,19 +9,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
 )
 
-const protocolVersion = 1
+const protocolVersion = 2
 
 var ErrRunning = errors.New("xserial MCP daemon is already running")
 var ErrIncompatible = errors.New("incompatible xserial MCP daemon; stop it before restarting with this executable")
 
 type Options struct {
 	StateDir string
+	URL      string
+	Stderr   io.Writer
 	Demo     bool
 	Version  string
 }
@@ -31,6 +35,7 @@ type metadata struct {
 	PID      int    `json:"pid"`
 	Demo     bool   `json:"demo"`
 	Version  string `json:"version"`
+	URL      string `json:"url,omitempty"`
 }
 
 func StateDirectory(path string, demo bool) (string, error) {
@@ -139,18 +144,19 @@ func Ensure(ctx context.Context, opts Options) (*Client, error) {
 		return nil, err
 	}
 	args := []string{"mcp", "daemon", "--state-dir", dir}
+	if opts.URL != "" {
+		args = append(args, "--url", opts.URL)
+	}
 	if opts.Demo {
 		args = append(args, "--demo")
 	}
 	cmd := exec.Command(executable, args...)
 	detach(cmd)
-	log, err := os.OpenFile(filepath.Join(dir, "daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-	if err != nil {
-		return nil, err
+	cmd.Stderr = opts.Stderr
+	if cmd.Stderr == nil {
+		cmd.Stderr = os.Stderr
 	}
-	cmd.Stderr = log
 	err = cmd.Start()
-	_ = log.Close()
 	if err != nil {
 		return nil, fmt.Errorf("start MCP daemon: %w", err)
 	}
@@ -163,11 +169,14 @@ func Ensure(ctx context.Context, opts Options) (*Client, error) {
 	for {
 		client, err := Connect(ctx, opts)
 		if err == nil || errors.Is(err, ErrIncompatible) {
+			if client != nil {
+				client.Started = true
+			}
 			return client, err
 		}
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("wait for MCP daemon (see %s): %w", filepath.Join(dir, "daemon.log"), ctx.Err())
+			return nil, fmt.Errorf("wait for MCP daemon: %w", ctx.Err())
 		case <-ticker.C:
 		}
 	}

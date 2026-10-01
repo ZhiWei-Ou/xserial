@@ -32,7 +32,7 @@ func Stop(ctx context.Context, opts Options) error {
 	}
 	defer client.Close()
 	// Shutdown can close this RPC connection before its response is sent.
-	// Acquiring daemon.lock proves all service workers and the port have closed.
+	// Acquiring daemon.lock proves all MCP workers have stopped; terminal ports remain open.
 	_ = client.Call(ctx, "stop", struct{}{}, nil)
 	lock, err := waitLock(ctx, filepath.Join(dir, "daemon.lock"))
 	if err != nil {

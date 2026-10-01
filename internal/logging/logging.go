@@ -58,6 +58,20 @@ type TextFormatter struct {
 	Color bool
 }
 
+// EventFormatter keeps machine-auditable business events separate from device
+// logs. CRLF also makes it suitable for the raw terminal's local output.
+type EventFormatter struct{}
+
+func (EventFormatter) Format(entry Entry) []byte {
+	var line bytes.Buffer
+	fmt.Fprintf(&line, "[ %s | %s ] time=%s", entry.Level, entry.Message, strconv.Quote(entry.Time.UTC().Format(time.RFC3339Nano)))
+	for i := 0; i+1 < len(entry.Fields); i += 2 {
+		fmt.Fprintf(&line, " %s=%s", entry.Fields[i], formatValue(entry.Fields[i+1]))
+	}
+	line.WriteString("\r\n")
+	return line.Bytes()
+}
+
 func (f TextFormatter) Format(entry Entry) []byte {
 	var line bytes.Buffer
 	fmt.Fprintf(&line, "%s [", entry.Time.Format("15:04:05.000"))
