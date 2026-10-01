@@ -25,10 +25,12 @@
   English · <a href="README_zh.md">简体中文</a>
 </p>
 
-<!-- Replace this placeholder with a screenshot or demo GIF when ready. -->
 <p align="center">
-  <strong>Screenshot / demo GIF</strong><br>
-  <em>Coming soon.</em>
+  <a href="assets/xserial-demo.mp4"><img src="assets/xserial-workbench.png" width="960" alt="xserial full-screen device console with a serial configuration sidebar"></a>
+</p>
+
+<p align="center">
+  <a href="assets/xserial-demo.mp4">Watch the demo (42 seconds, MP4)</a> — RawUI, the full-screen console, and Hexdump.
 </p>
 
 ## Features
@@ -100,6 +102,10 @@ Paste `AA 01`, `AA01`, `AA,01`, or `0xAA 0x01`; sending only happens when you pr
 | Ctrl-P / Ctrl-C | Open the command menu / quit |
 
 RX remains a **data block** unless a framing rule is explicitly selected. Device control bytes are shown as data and never executed by the workbench. `modbus-read` uses response structure; it does not implement RTU timing or a complete Modbus master.
+
+<p align="center">
+  <img src="assets/xserial-inspector.png" width="960" alt="xserial binary workbench showing a Modbus Hex request and response with timestamps and ASCII">
+</p>
 
 ### Record, replay, and export
 

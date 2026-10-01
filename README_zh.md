@@ -25,10 +25,12 @@
   <a href="README.md">English</a> · 简体中文
 </p>
 
-<!-- 准备好截图或演示动图后，替换此处占位。 -->
 <p align="center">
-  <strong>截图 / 演示动图</strong><br>
-  <em>待补充。</em>
+  <a href="assets/xserial-demo.mp4"><img src="assets/xserial-workbench.png" width="960" alt="xserial 全屏设备控制台与串口配置侧栏"></a>
+</p>
+
+<p align="center">
+  <a href="assets/xserial-demo.mp4">观看演示（42 秒，MP4）</a>：RawUI、全屏控制台与 Hexdump。
 </p>
 
 ## 核心功能
@@ -100,6 +102,10 @@ xserial demo --frame modbus-read --commands examples/modbus/commands.json
 | Ctrl-P / Ctrl-C | 打开命令菜单 / 退出 |
 
 未显式选择分帧规则时，RX 只作为**数据块**展示。设备控制字节作为数据显示，不会在工作台中执行。`modbus-read` 根据响应结构组帧，不实现 RTU 静默时间或完整 Modbus 主站。
+
+<p align="center">
+  <img src="assets/xserial-inspector.png" width="960" alt="xserial 二进制工作台展示带时间戳与 ASCII 的 Modbus Hex 请求和响应">
+</p>
 
 ### 录制、回放与导出
 
