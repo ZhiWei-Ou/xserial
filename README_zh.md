@@ -26,12 +26,10 @@
 </p>
 
 <p align="center">
-  <a href="assets/xserial-demo.mp4"><img src="assets/xserial-workbench.png" width="960" alt="xserial 全屏设备控制台与串口配置侧栏"></a>
+  <strong>演示（42 秒）</strong>：RawUI、全屏控制台与 Hexdump。
 </p>
 
-<p align="center">
-  <a href="assets/xserial-demo.mp4">观看演示（42 秒，MP4）</a>：RawUI、全屏控制台与 Hexdump。
-</p>
+https://github.com/user-attachments/assets/91dca830-0c6a-41ba-96f0-97ad97430697
 
 ## 核心功能
 
@@ -79,6 +77,10 @@ xserial /dev/ttyUSB0 --TUI
 ```
 
 此终端 UI 处于 Beta。按 `Ctrl-P` 打开命令菜单，按 `Ctrl-P c` 聚焦配置侧栏，按 `Ctrl-C` 退出。
+
+<p align="center">
+  <img src="assets/xserial-workbench.png" width="960" alt="xserial 全屏设备控制台与串口配置侧栏">
+</p>
 
 ### 调试二进制协议
 

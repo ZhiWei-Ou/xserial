@@ -26,12 +26,10 @@
 </p>
 
 <p align="center">
-  <a href="assets/xserial-demo.mp4"><img src="assets/xserial-workbench.png" width="960" alt="xserial full-screen device console with a serial configuration sidebar"></a>
+  <strong>Demo (42 seconds)</strong> — RawUI, the full-screen console, and Hexdump.
 </p>
 
-<p align="center">
-  <a href="assets/xserial-demo.mp4">Watch the demo (42 seconds, MP4)</a> — RawUI, the full-screen console, and Hexdump.
-</p>
+https://github.com/user-attachments/assets/91dca830-0c6a-41ba-96f0-97ad97430697
 
 ## Features
 
@@ -79,6 +77,10 @@ xserial /dev/ttyUSB0 --TUI
 ```
 
 This terminal UI is Beta. Press `Ctrl-P` for commands, `Ctrl-P c` to focus configuration, and `Ctrl-C` to quit.
+
+<p align="center">
+  <img src="assets/xserial-workbench.png" width="960" alt="xserial full-screen device console with a serial configuration sidebar">
+</p>
 
 ### Debug a binary protocol
 
