@@ -32,6 +32,7 @@ clean:
 release:
 	@rm -rf $(RELEASE_DIR)
 	@mkdir -p $(RELEASE_STAGE)
+	@cp LICENSE $(RELEASE_STAGE)/LICENSE
 	@set -eu; \
 	for os in $(TARGET_OS); do \
 		for arch in $(TARGET_ARCH); do \
@@ -40,9 +41,9 @@ release:
 			if [ "$${os}" = "windows" ]; then binary="$(APP_NAME).exe"; fi; \
 			CGO_ENABLED=0 GOOS="$${os}" GOARCH="$${arch}" go build -trimpath -ldflags "$(RELEASE_LDFLAGS)" -o "$(RELEASE_STAGE)/$${binary}" $(APP_DIR); \
 			if [ "$${os}" = "windows" ]; then \
-				(cd $(RELEASE_STAGE) && zip -q "../$${name}.zip" "$${binary}"); \
+			(cd $(RELEASE_STAGE) && zip -q "../$${name}.zip" "$${binary}" LICENSE); \
 			else \
-				tar -C $(RELEASE_STAGE) -czf "$(RELEASE_DIR)/$${name}.tar.gz" "$${binary}"; \
+			tar -C $(RELEASE_STAGE) -czf "$(RELEASE_DIR)/$${name}.tar.gz" "$${binary}" LICENSE; \
 			fi; \
 			rm -f "$(RELEASE_STAGE)/$${binary}"; \
 		done; \
