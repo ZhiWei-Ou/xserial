@@ -238,8 +238,9 @@ needed. Read audits include cursor, count and return reason, without copying
 device output. Stdio subscribers use a bounded audit stream; slow subscribers
 receive an explicit gap record.
 
-RawUI displays AI write records through its local stderr output with CRLF.
-TUI/workbench leave auditing to the MCP daemon during full-screen operation.
+MCP audit records appear on the MCP daemon or stdio bridge's stderr.
+RawUI, TUI and workbench leave auditing to MCP and display only their own
+local session output.
 Device stdout and stdio MCP stdout remain their respective data channels.
 
 ## Try without hardware

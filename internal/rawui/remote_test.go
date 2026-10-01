@@ -35,7 +35,7 @@ func (w *receivedOutput) Write(data []byte) (int, error) {
 	return n, err
 }
 
-func TestRemoteSendPreservesRawDeviceBytesLocalAuditAndRestore(t *testing.T) {
+func TestRemoteSendPreservesRawDeviceBytesAndRestore(t *testing.T) {
 	input, writer, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestRemoteSendPreservesRawDeviceBytesLocalAuditAndRestore(t *testing.T) {
 	done := make(chan error, 1)
 	frontend := New(Config{Terminal: terminal, Input: input, Output: output, Local: logger})
 	go func() {
-		done <- session.New(session.Config{Port: demo.NewPort(), Debug: debug, Frontend: frontend, RemoteAudit: logger}).Run(ctx)
+		done <- session.New(session.Config{Port: demo.NewPort(), Debug: debug, Frontend: frontend, Logger: logger}).Run(ctx)
 	}()
 	<-terminal.ready
 	status := debug.Status()
@@ -74,7 +74,7 @@ func TestRemoteSendPreservesRawDeviceBytesLocalAuditAndRestore(t *testing.T) {
 	if !bytes.Equal(output.Bytes(), want) {
 		t.Fatalf("stdout = %x", output.Bytes())
 	}
-	if !bytes.Contains(local.Bytes(), []byte("[ INFO | mcp.send ]")) || !bytes.Contains(local.Bytes(), []byte("\r\n")) {
+	if local.String() != "\r\n" {
 		t.Fatalf("stderr = %q", local.String())
 	}
 }

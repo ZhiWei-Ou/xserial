@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,7 +27,7 @@ func TestRemoteWritesShareKeyboardSerializationAndRecording(t *testing.T) {
 	port := newBlockingPort()
 	port.shortWrite = 1
 	debug := debugsession.New(debugsession.Connection{})
-	var journal, audit bytes.Buffer
+	var journal bytes.Buffer
 	recorder, err := capture.NewWriter(&journal, capture.Header{})
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +57,7 @@ func TestRemoteWritesShareKeyboardSerializationAndRecording(t *testing.T) {
 		e.Quit()
 		return nil
 	})
-	if err := New(Config{Port: port, Debug: debug, Frontend: frontend, Recorder: recorder, RemoteAudit: &audit}).Run(context.Background()); err != nil {
+	if err := New(Config{Port: port, Debug: debug, Frontend: frontend, Recorder: recorder}).Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	session, err := capture.Read(&journal)
@@ -77,9 +76,6 @@ func TestRemoteWritesShareKeyboardSerializationAndRecording(t *testing.T) {
 	}
 	if !remote || string(actual) != port.Written() {
 		t.Fatalf("recording = %+v", session.Records)
-	}
-	if !strings.Contains(audit.String(), "[ INFO | mcp.send ]") || !strings.HasSuffix(audit.String(), "\r\n") {
-		t.Fatalf("local audit = %q", audit.String())
 	}
 }
 

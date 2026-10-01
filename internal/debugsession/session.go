@@ -12,7 +12,7 @@ import (
 
 // Sender validates generation at the serial writer boundary. checkpoint is
 // called there before writing, and never after Sender returns.
-type Sender func(ctx context.Context, generation uint64, target Status, data []byte, checkpoint func()) error
+type Sender func(ctx context.Context, generation uint64, data []byte, checkpoint func()) error
 
 // Session observes a terminal-owned connection. It owns only bounded history;
 // no IPC reader or daemon is involved in the device's receive path.
@@ -136,7 +136,7 @@ func (s *Session) Send(ctx context.Context, in SendInput) (SendResult, error) {
 	// Retain a checkpoint even when cancellation prevents entering the writer.
 	// The boundary checkpoint includes output received while the send was queued.
 	var mu sync.Mutex
-	err = sender(ctx, generation, Status{SessionID: h.id, Connection: &h.connection}, data, func() { mu.Lock(); result.Cursor = h.head(); mu.Unlock() })
+	err = sender(ctx, generation, data, func() { mu.Lock(); result.Cursor = h.head(); mu.Unlock() })
 	mu.Lock()
 	defer mu.Unlock()
 	if err == nil {

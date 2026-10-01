@@ -117,7 +117,6 @@ type Frontend interface {
 type Config struct {
 	Connection        ConnectionConfig
 	Debug             *debugsession.Session
-	RemoteAudit       io.Writer
 	Port              SerialPort
 	Reconnect         func() (SerialPort, error)
 	ReconnectInterval time.Duration
@@ -151,7 +150,6 @@ type endpoint struct {
 	// configuration and transfer startup use the same gate. It is never closed.
 	sendGate            chan struct{}
 	debug               *debugsession.Session
-	remoteAudit         io.Writer
 	mu                  sync.Mutex
 	stopping            bool
 	transferActive      bool
@@ -549,7 +547,7 @@ func (s *Session) Run(parent context.Context) error {
 		return errors.Join(normalizeRunError(err), pipeline.Close(context.Background()))
 	}
 	e := &endpoint{
-		sendGate: make(chan struct{}, 1), debug: s.cfg.Debug, remoteAudit: s.cfg.RemoteAudit, ctx: ctx, cancel: cancel, events: make(chan Event, 32), logger: s.cfg.Logger,
+		sendGate: make(chan struct{}, 1), debug: s.cfg.Debug, ctx: ctx, cancel: cancel, events: make(chan Event, 32), logger: s.cfg.Logger,
 		ready: make(chan struct{}), backend: backendEndpoint, pipeline: pipeline,
 		openConnection: s.cfg.OpenConnection,
 		recorder:       s.cfg.Recorder,

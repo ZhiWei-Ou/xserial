@@ -10,7 +10,7 @@ func TestTerminalHistoryAndIndependentObservers(t *testing.T) {
 	s := New(Connection{Port: "test", Baud: 115200})
 	s.ConnectionChanged(1, true)
 	status := s.Status()
-	s.SetSender(func(ctx context.Context, gen uint64, target Status, data []byte, checkpoint func()) error {
+	s.SetSender(func(ctx context.Context, gen uint64, data []byte, checkpoint func()) error {
 		if gen != 1 {
 			t.Fatalf("generation = %d", gen)
 		}
@@ -71,7 +71,7 @@ func TestFailedSendPreservesUnknownDelivery(t *testing.T) {
 	s := New(Connection{Port: "test"})
 	s.ConnectionChanged(1, true)
 	status := s.Status()
-	s.SetSender(func(ctx context.Context, gen uint64, target Status, data []byte, checkpoint func()) error {
+	s.SetSender(func(ctx context.Context, gen uint64, data []byte, checkpoint func()) error {
 		s.Received(gen, []byte("queued output"))
 		checkpoint()
 		return context.DeadlineExceeded

@@ -243,12 +243,8 @@ func runConn(ctx context.Context, opts connOptions) (runErr error) {
 		logger.Warn("mcp.publish_failed", "error", publishErr)
 	}
 	defer func() { runErr = errors.Join(runErr, closePublication(publication)) }()
-	var remoteAudit io.Writer
-	if !opts.workbench && !opts.tui {
-		remoteAudit = logger
-	}
 	s := session.New(session.Config{
-		Connection: connectionConfig, Debug: debug, RemoteAudit: remoteAudit,
+		Connection: connectionConfig, Debug: debug,
 		Port:              port,
 		Reconnect:         openPort,
 		ReconnectInterval: time.Second,
