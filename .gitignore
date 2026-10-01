@@ -2,3 +2,6 @@
 /dist/
 .DS_Store
 /.vscode/
+/.nvim/
+AGENTS.md
+CONTEXT.md
