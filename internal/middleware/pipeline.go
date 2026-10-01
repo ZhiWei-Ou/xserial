@@ -69,7 +69,7 @@ func NewPipeline(handlers ...Handler) (*Pipeline, error) {
 	p := &Pipeline{}
 	for _, handler := range handlers {
 		if err := p.Add(context.Background(), handler); err != nil {
-			return nil, err
+			return nil, errors.Join(err, p.Close(context.Background()))
 		}
 	}
 	return p, nil

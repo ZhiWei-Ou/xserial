@@ -151,12 +151,15 @@ func (s *Session) Run(parent context.Context, ready chan<- *Endpoint) error {
 		ctx: ctx, cancel: cancel, events: make(chan Event, 32),
 		writes: make(chan writeRequest), reconfigure: make(chan reconfigureRequest),
 	}
-	e.setConnection(s.cfg.Port, 1)
+	e.setConnection(&ownedPort{Port: s.cfg.Port}, 1)
 	select {
 	case ready <- e:
 	case <-ctx.Done():
 		cancel()
-		return context.Canceled
+		if err := s.cfg.Port.Close(); err != nil {
+			return fmt.Errorf("close serial port: %w", err)
+		}
+		return nil
 	}
 
 	failures := make(chan connectionFailure, 2)
@@ -250,7 +253,7 @@ func (s *Session) runConnections(ctx context.Context, e *Endpoint, failures chan
 					req.done <- errors.Join(err, restoreErr)
 					return fmt.Errorf("apply serial configuration: %w", errors.Join(err, restoreErr))
 				}
-				port = restoredPort
+				port = &ownedPort{Port: restoredPort}
 				generation++
 				e.setConnection(port, generation)
 				readerDone = s.startReader(ctx, e, port, generation, failures)
@@ -258,7 +261,7 @@ func (s *Session) runConnections(ctx context.Context, e *Endpoint, failures chan
 				continue
 			}
 
-			port = newPort
+			port = &ownedPort{Port: newPort}
 			open = req.open
 			generation++
 			e.setConnection(port, generation)
@@ -276,7 +279,7 @@ func (s *Session) runConnections(ctx context.Context, e *Endpoint, failures chan
 			if err != nil {
 				return err
 			}
-			port = newPort
+			port = &ownedPort{Port: newPort}
 			open = newOpen
 			generation++
 			e.setConnection(port, generation)

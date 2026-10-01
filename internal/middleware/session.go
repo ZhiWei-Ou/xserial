@@ -429,7 +429,7 @@ func (s *Session) Run(parent context.Context) error {
 	pipeline, err := NewPipeline(s.cfg.Handlers...)
 	if err != nil {
 		cancel()
-		return err
+		return errors.Join(err, s.cfg.Port.Close())
 	}
 	var reconnect func() (backend.Port, error)
 	if s.cfg.Reconnect != nil {
@@ -448,10 +448,11 @@ func (s *Session) Run(parent context.Context) error {
 	case backendEndpoint = <-ready:
 	case err := <-backendDone:
 		cancel()
-		return normalizeRunError(err)
+		return errors.Join(normalizeRunError(err), pipeline.Close(context.Background()))
 	case <-parent.Done():
 		cancel()
-		return nil
+		err := <-backendDone
+		return errors.Join(normalizeRunError(err), pipeline.Close(context.Background()))
 	}
 	e := &endpoint{
 		ctx: ctx, cancel: cancel, events: make(chan Event, 32), logger: s.cfg.Logger,
@@ -465,13 +466,9 @@ func (s *Session) Run(parent context.Context) error {
 	go func() { frontendDone <- s.cfg.Frontend.Run(ctx, e) }()
 
 	var runErr error
-	backendReturned := false
 	dispatcherReturned := false
 	frontendReturned := false
 	select {
-	case err := <-backendDone:
-		runErr = normalizeRunError(err)
-		backendReturned = true
 	case err := <-dispatcherDone:
 		runErr = normalizeRunError(err)
 		dispatcherReturned = true
@@ -482,18 +479,13 @@ func (s *Session) Run(parent context.Context) error {
 	case <-parent.Done():
 	}
 
-	if backendReturned && !dispatcherReturned {
-		if err := <-dispatcherDone; runErr == nil {
-			runErr = normalizeRunError(err)
-		}
-		dispatcherReturned = true
-	}
+	// Backend completion closes its event stream. The dispatcher drains that
+	// stream while the frontend is alive; a frontend exit cancels it immediately
+	// rather than waiting on a producer blocked behind an abandoned UI queue.
 	cancel()
 	e.stop()
-	if !backendReturned {
-		if err := <-backendDone; runErr == nil {
-			runErr = normalizeRunError(err)
-		}
+	if err := <-backendDone; runErr == nil {
+		runErr = normalizeRunError(err)
 	}
 	if !dispatcherReturned {
 		if err := <-dispatcherDone; runErr == nil {
