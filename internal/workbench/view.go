@@ -81,9 +81,6 @@ func (m *model) View() tea.View {
 	if m.cfg.Demo {
 		mode = "DEMO"
 	}
-	if m.cfg.Replay != nil {
-		mode = fmt.Sprintf("REPLAY %.2gx", m.speed)
-	}
 	header := fmt.Sprintf(" xserial %s  %s  %d %d/%s/%s  %s  RX %d  TX %d", mode,
 		m.cfg.Connection.PortName, m.cfg.Connection.BaudRate, m.cfg.Connection.DataBits,
 		m.cfg.Connection.Parity, m.cfg.Connection.StopBits, connection, m.rxBytes, m.txBytes)
@@ -147,14 +144,8 @@ func (m *model) View() tea.View {
 		}
 	}
 	help := " Enter send  ↑↓ history  Tab inspect  Ctrl-K checksum  Ctrl-P menu  Ctrl-C quit"
-	if m.cfg.Replay != nil {
-		help = " Space pause  +/- speed  R restart  Tab inspect  Ctrl-F search  Ctrl-P menu  Ctrl-C quit"
-	}
 	if width < 60 {
 		help = " Enter send  Tab inspect  ^P menu  ^C quit"
-		if m.cfg.Replay != nil {
-			help = " Space pause  +/- speed  Tab inspect  ^C quit"
-		}
 	}
 	lines = append(lines, fit(preview, width), fit(" "+m.status, width), fit(help, width))
 	view := tea.NewView(strings.Join(lines[:min(len(lines), m.height)], "\n"))

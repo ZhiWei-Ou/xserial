@@ -65,10 +65,6 @@ func (m *model) browseHistory(delta int) {
 }
 
 func (m *model) send() tea.Cmd {
-	if m.cfg.Replay != nil {
-		m.status = "Offline replay cannot send to a device"
-		return nil
-	}
 	if m.sending {
 		return nil
 	}
@@ -118,9 +114,6 @@ func (m *model) action(action string) tea.Cmd {
 	case "quit":
 		if m.endpoint != nil {
 			m.endpoint.Quit()
-		}
-		if m.replayCancel != nil {
-			m.replayCancel()
 		}
 		return tea.Quit
 	case "follow":
@@ -180,7 +173,7 @@ func (m *model) action(action string) tea.Cmd {
 			m.status = "No traffic to mark"
 			return nil
 		}
-		if m.cfg.Recorder == nil && m.cfg.MarksPath == "" {
+		if m.cfg.Recorder == nil {
 			m.status = "Use --record to save live marks"
 			return nil
 		}
@@ -225,11 +218,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.action(commands[m.paletteIndex].action)
 		}
 		return m, nil
-	}
-	if m.cfg.Replay != nil {
-		if handled, cmd := m.replayKey(key); handled {
-			return m, cmd
-		}
 	}
 	for _, command := range commands {
 		if key == command.key {

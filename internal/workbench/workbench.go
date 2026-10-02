@@ -25,10 +25,7 @@ type Config struct {
 	Favorites     []Favorite
 	Demo          bool
 	Framing       hexdata.FrameConfig
-	Replay        *capture.Session
 	Recorder      *capture.Writer
-	MarksPath     string
-	Marks         []capture.Mark
 }
 
 type Frontend struct{ cfg Config }
@@ -43,9 +40,6 @@ func (f *Frontend) Run(ctx context.Context, endpoint middleware.Endpoint) error 
 	m := newModel(runCtx, endpoint, f.cfg)
 	defer func() {
 		cancel()
-		if m.replayCancel != nil {
-			m.replayCancel()
-		}
 		m.tasks.stop()
 	}()
 	program := tea.NewProgram(m, tea.WithContext(runCtx), tea.WithInput(f.cfg.Input), tea.WithOutput(f.cfg.Output))

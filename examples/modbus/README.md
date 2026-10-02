@@ -4,7 +4,7 @@ This directory provides command favorites for normal queries, bad response CRCs,
 
 ```bash
 xserial demo --frame modbus-read --commands examples/modbus/commands.json
-xserial replay examples/modbus/demo.xsr --frame modbus-read
+xserial replay examples/modbus/demo.xsr --hexdump --frame modbus-read
 xserial export examples/modbus/demo.xsr
 ```
 

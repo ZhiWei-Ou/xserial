@@ -4,7 +4,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"context"
 	"fmt"
-	"github.com/ZhiWei-Ou/xserial/internal/capture"
 	"github.com/ZhiWei-Ou/xserial/internal/hexdata"
 	"github.com/ZhiWei-Ou/xserial/internal/middleware"
 	"time"
@@ -68,11 +67,6 @@ type model struct {
 	selectionWidth   int
 	checksumIndex    int
 	saving           bool
-	paused           bool
-	speed            float64
-	replayIndex      int
-	replayCancel     context.CancelFunc
-	replayGeneration uint64
 	query            []rune
 	matches          []int
 	matchIndex       int
@@ -89,11 +83,6 @@ func newModel(ctx context.Context, endpoint middleware.Endpoint, cfg Config) *mo
 	if endpoint != nil {
 		m.events = endpoint.Events()
 	}
-	m.speed = 1
-	if cfg.Replay != nil {
-		m.connected = false
-		m.status = "Replay · Space pause · +/- speed · R restart"
-	}
 	if cfg.Demo {
 		m.setInput("01 03 00 00 00 02 C4 0B")
 		m.status = "Demo: Enter queries two registers; 02 selects a bad CRC; 03 splits the response"
@@ -102,9 +91,6 @@ func newModel(ctx context.Context, endpoint middleware.Endpoint, cfg Config) *mo
 }
 
 func (m *model) Init() tea.Cmd {
-	if m.cfg.Replay != nil {
-		return m.scheduleReplay()
-	}
 	return m.waitEvent()
 }
 
@@ -124,10 +110,6 @@ func (m *model) waitEvent() tea.Cmd {
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case replayTickMsg:
-		if !m.paused && msg.generation == m.replayGeneration {
-			return m, m.advanceReplay()
-		}
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, msg.Width), max(1, msg.Height)
 		m.clampScroll()
@@ -164,9 +146,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.entries[i].Note = msg.note
 					break
 				}
-			}
-			if m.cfg.Replay != nil {
-				m.cfg.Marks = append(m.cfg.Marks, capture.Mark{At: msg.at, Note: msg.note})
 			}
 			m.status = "Mark saved: " + msg.note
 		}
@@ -213,11 +192,6 @@ func (m *model) appendTraffic(entry trafficEntry) {
 	entry.Data = append([]byte(nil), entry.Data...)
 	m.nextID++
 	entry.ID = m.nextID
-	for _, mark := range m.cfg.Marks {
-		if mark.At.Equal(entry.At) {
-			entry.Note = mark.Note
-		}
-	}
 	m.entries = append(m.entries, entry)
 	m.trafficBytes += len(entry.Data)
 	removed := 0

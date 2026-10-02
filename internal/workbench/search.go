@@ -67,16 +67,10 @@ func (m *model) handleMarkKey(msg tea.KeyPressMsg) tea.Cmd {
 		entry := m.entries[m.selected]
 		id := entry.ID
 		recorder := m.cfg.Recorder
-		path := m.cfg.MarksPath
 		m.modal = ""
 		m.marking = true
 		return m.tasks.wrap(func() tea.Msg {
-			var err error
-			if recorder != nil {
-				_, err = recorder.Append(capture.Record{Kind: "mark", At: entry.At, Data: entry.Data, Note: note})
-			} else {
-				err = capture.SaveMark(path, capture.Mark{At: entry.At, Note: note})
-			}
+			_, err := recorder.Append(capture.Record{Kind: "mark", At: entry.At, Data: entry.Data, Note: note})
 			return markedMsg{id: id, at: entry.At, note: note, err: err}
 		})
 	default:

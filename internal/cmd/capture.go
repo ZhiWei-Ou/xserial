@@ -9,16 +9,21 @@ import (
 
 	"github.com/ZhiWei-Ou/xserial/internal/capture"
 	"github.com/ZhiWei-Ou/xserial/internal/hexdata"
-	"github.com/ZhiWei-Ou/xserial/internal/middleware"
-	"github.com/ZhiWei-Ou/xserial/internal/workbench"
+	"github.com/ZhiWei-Ou/xserial/internal/rawui"
+	"github.com/ZhiWei-Ou/xserial/internal/replay"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 func newReplayCommand() *cobra.Command {
 	var frameRule string
+	var hexdump bool
 	cmd := &cobra.Command{Use: "replay <capture.xsr>", Short: "Replay a recorded session offline; never opens a serial port", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			framing, err := hexdata.ParseFrameConfig(frameRule)
+			if cmd.Flags().Changed("frame") && !hexdump {
+				return errors.New("--frame requires --hexdump for replay")
+			}
+			framing, err := replay.ParseFrameConfig(frameRule)
 			if err != nil {
 				return err
 			}
@@ -26,16 +31,23 @@ func newReplayCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			header := session.Header
-			marks, err := capture.LoadMarks(args[0] + ".marks.json")
-			if err != nil {
-				return fmt.Errorf("load replay marks: %w", err)
+			cfg := replay.Config{Input: cmd.InOrStdin(), Output: cmd.OutOrStdout(), Local: cmd.ErrOrStderr(), Hexdump: hexdump, Framing: framing}
+			input, inputFile := cfg.Input.(*os.File)
+			output, outputFile := cfg.Output.(*os.File)
+			if inputFile && outputFile && term.IsTerminal(int(input.Fd())) && term.IsTerminal(int(output.Fd())) {
+				cfg.Terminal = rawui.NewOSTerminal(input)
+				cfg.Size = func() (int, int) {
+					width, height, err := term.GetSize(int(output.Fd()))
+					if err != nil || width < 1 || height < 1 {
+						return 100, 28
+					}
+					return width, height
+				}
 			}
-			cfg := workbench.Config{Input: cmd.InOrStdin(), Output: cmd.OutOrStdout(), Framing: framing, MarksPath: args[0] + ".marks.json", Marks: marks,
-				Connection: middleware.ConnectionConfig{PortName: header.Port, BaudRate: header.Baud, DataBits: header.DataBits, Parity: header.Parity, StopBits: header.StopBits}}
-			return workbench.RunReplay(cmd.Context(), cfg, session)
+			return replay.Run(cmd.Context(), cfg, session)
 		}}
-	cmd.Flags().StringVar(&frameRule, "frame", "chunk", "RX framing rule for playback")
+	cmd.Flags().BoolVar(&hexdump, "hexdump", false, "display recorded TX/RX as HEX instead of native terminal output")
+	cmd.Flags().StringVar(&frameRule, "frame", "newline", "HEX frame rule: newline, gap:DURATION, delimiter:HEX, fixed:N")
 	return cmd
 }
 

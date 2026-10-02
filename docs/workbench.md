@@ -79,7 +79,7 @@ The framer handles split frames and multiple frames joined in one read. Until a 
 2. The response is `01 03 04 00 64 00 65 7B C7`. Press Tab, select offset 3 and width 2: big-endian uint16 shows 100, and CRC16 Modbus for the entire frame shows OK.
 3. Press Esc to close the inspector. Change the request to `02 03 00 00 00 02`, use Ctrl-K to append the CRC, and send it. Inspect the deliberately corrupted response checksum.
 4. Change the request to `03 03 00 00 00 02` and append a new CRC. The same framing rule combines the two reads into one frame.
-5. Use `--record` to save the session, then inspect it offline with `xserial replay`.
+5. Use `--record` to save the session, then view it offline with `xserial replay session.xsr --hexdump --frame modbus-read`.
 
 For CRC and protocol fields, see the [Modbus Serial Line Guide V1.02](https://www.modbus.org/file/secure/modbusoverserial.pdf). This example covers manual sending, field interpretation, and checksum verification.
 
@@ -87,7 +87,7 @@ For CRC and protocol fields, see the [Modbus Serial Line Guide V1.02](https://ww
 
 Press Ctrl-F, enter a Hex pattern, and press Enter to search retained traffic. The inspector selects the first matching entry; N moves to the next match. Searches operate on data blocks or assembled frames. Configure appropriate framing to search across read boundaries.
 
-Ctrl-B adds a note to the inspected entry, or to the latest entry when the inspector is closed. Live sessions need `--record` to save marks. Offline playback saves marks in a `.marks.json` sidecar beside the source recording, leaving the source unchanged. Exports include saved marks.
+Ctrl-B adds a note to the inspected entry, or to the latest entry when the inspector is closed. Live sessions need `--record` to save marks. Exports include saved marks. Offline replay provides playback controls and leaves the recording unchanged.
 
 ## History and Resource Limits
 
