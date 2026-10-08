@@ -77,6 +77,10 @@ xserial mcp
 
 配置方式见 [MCP 指南](docs/mcp.md)。
 
+### YMODEM 传输
+
+默认终端中，按 `Ctrl-P Ctrl-U` 上传文件，按 `Ctrl-P Ctrl-D` 下载到当前目录。上传提示中，`Tab` 补全文件和目录路径，有多个候选时再按一次列出候选。支持方向键、Home/End、Backspace/Delete 编辑，`Ctrl-U` 清除光标前的内容。支持相对路径、`~/` 和含空格路径（可加引号）。按 Enter 开始，按 Esc 取消。
+
 ### 常用命令
 
 | 用途 | 命令 |

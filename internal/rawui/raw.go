@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ZhiWei-Ou/xserial/internal/linetime"
 	session "github.com/ZhiWei-Ou/xserial/internal/middleware"
@@ -173,7 +174,21 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 	state := inputNormal
 	ymodemMode := false
 	progressLineOpen := false
-	var path strings.Builder
+	var path pathPrompt
+	escapeTimer := time.NewTimer(time.Hour)
+	escapeTimer.Stop()
+	defer escapeTimer.Stop()
+	cancelSelection := func() {
+		ymodemMode = false
+		state = inputNormal
+		fmt.Fprint(f.cfg.Local, "\x1b[?2004l\r\n")
+		printLocalLine(f.cfg.Local, "File selection canceled")
+	}
+	defer func() {
+		if state == inputYMODEMUploadPath {
+			fmt.Fprint(f.cfg.Local, "\x1b[?2004l")
+		}
+	}()
 	requestRead := func() {
 		select {
 		case requests <- struct{}{}:
@@ -195,6 +210,13 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-escapeTimer.C:
+			if state == inputYMODEMUploadPath && len(path.pending) > 0 && path.pending[0] == 0x1b {
+				if len(path.pending) == 1 && !path.paste {
+					cancelSelection()
+				}
+				path.pending = nil
+			}
 		case event, ok := <-endpoint.Events():
 			if !ok {
 				return nil
@@ -274,9 +296,13 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 						printHelp(f.cfg.Local)
 					case actionYMODEMUpload:
 						ymodemMode = true
-						path.Reset()
+						path = pathPrompt{}
+						if file, ok := f.cfg.Input.(*os.File); ok {
+							path.width, _, _ = term.GetSize(int(file.Fd()))
+						}
 						state = inputYMODEMUploadPath
-						fmt.Fprint(f.cfg.Local, "\r\nYMODEM upload file (Esc to cancel): ")
+						fmt.Fprint(f.cfg.Local, "\r\n\x1b[?2004h")
+						path.render(f.cfg.Local)
 					case actionYMODEMDownload:
 						ymodemMode = true
 						printLocalLine(f.cfg.Local, "")
@@ -298,37 +324,52 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 					}
 				}
 			case inputYMODEMUploadPath:
-				switch result.b {
-				case 0x1b:
-					ymodemMode = false
-					path.Reset()
-					state = inputNormal
+				// A bare Esc followed by ordinary input cancels selection, then lets that
+				// next byte resume normal serial input. CSI/SS3 sequences stay local.
+				if len(path.pending) == 1 && path.pending[0] == 0x1b && !path.paste && result.b != '[' && result.b != 'O' {
+					escapeTimer.Stop()
+					cancelSelection()
+					if result.b == f.cfg.PrefixKey {
+						state = inputAfterPrefix
+					} else if err := endpoint.Send(ctx, []byte{result.b}); err != nil && !errors.Is(err, session.ErrDisconnected) {
+						return err
+					}
+					requestRead()
+					continue
+				}
+				submit, canceled := path.feed(result.b, f.cfg.Local)
+				escapeTimer.Stop()
+				if len(path.pending) > 0 && path.pending[0] == 0x1b {
+					escapeTimer.Reset(100 * time.Millisecond)
+				}
+				if canceled {
+					cancelSelection()
+				}
+				if submit {
+					name, err := inputPath(string(path.line))
+					if err == nil && name == "" {
+						cancelSelection()
+						break
+					}
+					if err == nil {
+						var info os.FileInfo
+						info, err = os.Stat(name)
+						if err == nil && !info.Mode().IsRegular() {
+							err = fmt.Errorf("not a regular file: %s", name)
+						}
+					}
+					if err == nil {
+						err = endpoint.StartYMODEMUpload(ctx, name)
+					}
 					printLocalLine(f.cfg.Local, "")
-					printLocalLine(f.cfg.Local, "File selection canceled")
-				case '\r', '\n':
-					printLocalLine(f.cfg.Local, "")
-					name := strings.TrimSpace(path.String())
-					if name == "" {
-						ymodemMode = false
-						state = inputNormal
-					} else if err := endpoint.StartYMODEMUpload(ctx, name); err != nil {
-						ymodemMode = false
+					if err != nil {
 						printLocalLine(f.cfg.Local, fmt.Sprintf("YMODEM upload failed: %v", err))
-						state = inputNormal
+						path.render(f.cfg.Local)
 					} else {
+						fmt.Fprint(f.cfg.Local, "\x1b[?2004l")
 						state = inputYMODEMTransfer
 						printLocalLine(f.cfg.Local, "Waiting for receiver (Esc to cancel)")
 					}
-				case 0x7f, '\b':
-					if path.Len() > 0 {
-						value := path.String()
-						path.Reset()
-						path.WriteString(value[:len(value)-1])
-						fmt.Fprint(f.cfg.Local, "\b \b")
-					}
-				default:
-					path.WriteByte(result.b)
-					_, _ = f.cfg.Local.Write([]byte{result.b})
 				}
 			case inputYMODEMTransfer:
 				if result.b == 0x1b {
@@ -353,6 +394,7 @@ func printHelp(w io.Writer) {
 	}
 	printLocalLine(w, "  Ctrl-P Ctrl-P  send Ctrl-P")
 	printLocalLine(w, "  Esc            cancel file selection or transfer")
+	printLocalLine(w, "  Tab            complete upload path (press again to list matches)")
 }
 
 func formatYMODEMResult(event session.YMODEMFinished) string {

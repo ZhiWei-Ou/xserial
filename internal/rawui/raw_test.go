@@ -220,6 +220,10 @@ func TestRawFrontendPrefixesReceivedLinesWhenTimeIsEnabled(t *testing.T) {
 }
 
 func TestRawFrontendStartsYMODEMTransfersWithControlShortcuts(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile("firmware.bin", []byte("firmware"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	endpoint := &fakeEndpoint{events: make(chan session.Event, 2), cancel: cancel, autoFinish: true}
 	frontend := New(Config{
@@ -270,6 +274,10 @@ func TestRawFrontendEscapesFilePathPrompts(t *testing.T) {
 }
 
 func TestRawFrontendEscCancelsActiveTransfers(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile("fw.bin", []byte("firmware"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	endpoint := &fakeEndpoint{events: make(chan session.Event, 2), cancel: cancel}
 	frontend := New(Config{

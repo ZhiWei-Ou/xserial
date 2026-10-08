@@ -77,6 +77,10 @@ Add `http://127.0.0.1:8765/mcp` to your agent's MCP configuration. For stdio cli
 
 See the [MCP guide](docs/mcp.md) for setup.
 
+### YMODEM transfers
+
+In the default terminal, press `Ctrl-P Ctrl-U` to upload a file or `Ctrl-P Ctrl-D` to download into the current directory. In the upload prompt, `Tab` completes file and directory paths; press it again to list ambiguous matches. Use arrow keys, Home/End, and Backspace/Delete to edit, or `Ctrl-U` to clear the text before the cursor. Relative paths, `~/`, and paths containing spaces (optionally quoted) are supported. Press Enter to start or Esc to cancel.
+
 ### More commands
 
 | Task | Command |
