@@ -54,7 +54,7 @@ func Run(parent context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	dir, err := StateDirectory(opts.StateDir, opts.Demo)
+	dir, err := StateDirectory(opts.StateDir)
 	if err != nil {
 		return err
 	}
@@ -63,7 +63,7 @@ func Run(parent context.Context, opts Options) error {
 		if errors.Is(err, ErrRunning) {
 			probe, cancel := context.WithTimeout(parent, time.Second)
 			defer cancel()
-			client, connectErr := Connect(probe, Options{StateDir: dir, Demo: opts.Demo})
+			client, connectErr := Connect(probe, Options{StateDir: dir})
 			if connectErr != nil {
 				return errors.Join(err, connectErr)
 			}
@@ -124,7 +124,7 @@ func Run(parent context.Context, opts Options) error {
 		}
 		protected.ServeHTTP(w, req)
 	})}
-	meta := metadata{Protocol: protocolVersion, Address: listener.Addr().String(), Token: randomToken(), PID: os.Getpid(), Demo: opts.Demo, Version: opts.Version, URL: u.String()}
+	meta := metadata{Protocol: protocolVersion, Address: listener.Addr().String(), Token: randomToken(), PID: os.Getpid(), Version: opts.Version, URL: u.String()}
 	if err := writeMetadata(dir, meta); err != nil {
 		return err
 	}

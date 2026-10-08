@@ -77,11 +77,7 @@ func (m *model) View() tea.View {
 	if !m.connected {
 		connection = "disconnected"
 	}
-	mode := "LIVE"
-	if m.cfg.Demo {
-		mode = "DEMO"
-	}
-	header := fmt.Sprintf(" xserial %s  %s  %d %d/%s/%s  %s  RX %d  TX %d", mode,
+	header := fmt.Sprintf(" xserial LIVE  %s  %d %d/%s/%s  %s  RX %d  TX %d",
 		m.cfg.Connection.PortName, m.cfg.Connection.BaudRate, m.cfg.Connection.DataBits,
 		m.cfg.Connection.Parity, m.cfg.Connection.StopBits, connection, m.rxBytes, m.txBytes)
 	lines := []string{accent.Render(fit(header, width)), accent.Render(strings.Repeat("─", width))}

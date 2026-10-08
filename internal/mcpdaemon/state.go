@@ -25,7 +25,6 @@ type Options struct {
 	StateDir string
 	URL      string
 	Stderr   io.Writer
-	Demo     bool
 	Version  string
 }
 type metadata struct {
@@ -33,22 +32,18 @@ type metadata struct {
 	Address  string `json:"address"`
 	Token    string `json:"token"`
 	PID      int    `json:"pid"`
-	Demo     bool   `json:"demo"`
+	Demo     bool   `json:"demo,omitempty"` // Reject descriptors from older simulated sessions.
 	Version  string `json:"version"`
 	URL      string `json:"url,omitempty"`
 }
 
-func StateDirectory(path string, demo bool) (string, error) {
+func StateDirectory(path string) (string, error) {
 	if path == "" {
 		cache, err := os.UserCacheDir()
 		if err != nil {
 			return "", err
 		}
-		name := "mcp"
-		if demo {
-			name = "mcp-demo"
-		}
-		path = filepath.Join(cache, "xserial", name)
+		path = filepath.Join(cache, "xserial", "mcp")
 	}
 	path, err := filepath.Abs(path)
 	if err != nil {
@@ -121,7 +116,7 @@ func randomToken() string {
 }
 
 func Ensure(ctx context.Context, opts Options) (*Client, error) {
-	dir, err := StateDirectory(opts.StateDir, opts.Demo)
+	dir, err := StateDirectory(opts.StateDir)
 	if err != nil {
 		return nil, err
 	}
@@ -146,9 +141,6 @@ func Ensure(ctx context.Context, opts Options) (*Client, error) {
 	args := []string{"mcp", "daemon", "--state-dir", dir}
 	if opts.URL != "" {
 		args = append(args, "--url", opts.URL)
-	}
-	if opts.Demo {
-		args = append(args, "--demo")
 	}
 	cmd := exec.Command(executable, args...)
 	detach(cmd)

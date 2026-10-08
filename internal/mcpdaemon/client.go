@@ -36,7 +36,7 @@ type Client struct {
 }
 
 func Connect(ctx context.Context, opts Options) (*Client, error) {
-	dir, err := StateDirectory(opts.StateDir, opts.Demo)
+	dir, err := StateDirectory(opts.StateDir)
 	if err != nil {
 		return nil, err
 	}
@@ -48,13 +48,13 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return nil, err
 	}
-	if meta.Demo != opts.Demo {
-		return nil, ErrIncompatible
-	}
 	return connectEndpoint(ctx, meta)
 }
 
 func connectEndpoint(ctx context.Context, meta metadata) (*Client, error) {
+	if meta.Demo {
+		return nil, ErrIncompatible
+	}
 	host, _, err := net.SplitHostPort(meta.Address)
 	if err != nil || host != "127.0.0.1" || len(meta.Token) != 64 {
 		return nil, errors.New("invalid xserial IPC endpoint")

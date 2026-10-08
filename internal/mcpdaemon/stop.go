@@ -8,7 +8,7 @@ import (
 )
 
 func Stop(ctx context.Context, opts Options) error {
-	dir, err := StateDirectory(opts.StateDir, opts.Demo)
+	dir, err := StateDirectory(opts.StateDir)
 	if err != nil {
 		return err
 	}

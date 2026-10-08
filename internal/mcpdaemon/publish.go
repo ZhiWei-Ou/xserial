@@ -25,7 +25,7 @@ type Publication struct {
 }
 
 func Publish(parent context.Context, opts Options, session *debugsession.Session) (*Publication, error) {
-	dir, err := StateDirectory(opts.StateDir, opts.Demo)
+	dir, err := StateDirectory(opts.StateDir)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +40,7 @@ func Publish(parent context.Context, opts Options, session *debugsession.Session
 	if err != nil {
 		return nil, err
 	}
-	meta := metadata{Protocol: protocolVersion, Address: listener.Addr().String(), Token: randomToken(), PID: os.Getpid(), Demo: opts.Demo, Version: opts.Version}
+	meta := metadata{Protocol: protocolVersion, Address: listener.Addr().String(), Token: randomToken(), PID: os.Getpid(), Version: opts.Version}
 	path := filepath.Join(dir, rand.Text()+".json")
 	data, err := json.Marshal(meta)
 	if err == nil {

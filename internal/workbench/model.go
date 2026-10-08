@@ -83,10 +83,6 @@ func newModel(ctx context.Context, endpoint middleware.Endpoint, cfg Config) *mo
 	if endpoint != nil {
 		m.events = endpoint.Events()
 	}
-	if cfg.Demo {
-		m.setInput("01 03 00 00 00 02 C4 0B")
-		m.status = "Demo: Enter queries two registers; 02 selects a bad CRC; 03 splits the response"
-	}
 	return m
 }
 

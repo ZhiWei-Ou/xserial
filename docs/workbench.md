@@ -2,18 +2,6 @@
 
 The workbench is for sending serial commands and debugging binary protocols. Default RawUI and `--TUI` serve device consoles. Use `--workbench` to edit binary commands; input is sent only when you press Enter.
 
-## Try It Without Hardware
-
-```bash
-xserial demo
-xserial demo --frame modbus-read
-xserial demo --snapshot --record demo.xsr
-```
-
-The demo uses the real session core with a simulated serial port. The default request, `01 03 00 00 00 02 C4 0B`, reads two registers with values 100 and 101. `--snapshot` runs one query and prints the actual workbench view, suitable for non-interactive terminals and documentation previews.
-
-The device address selects the scenario: address 1 returns a normal response, address 2 deliberately corrupts the response CRC, address 3 splits the response across two reads, and address 4 joins two responses into one read. After changing the address, remove the old CRC and use Ctrl-K to append a new CRC16 Modbus checksum. Load `examples/modbus/commands.json` to try all four scenarios.
-
 ## Hex Editing and Command Favorites
 
 ```bash
@@ -75,11 +63,12 @@ The framer handles split frames and multiple frames joined in one read. Until a 
 
 ## Modbus Query Walkthrough
 
-1. Run `xserial demo --frame modbus-read` and press Enter to send the default query.
-2. The response is `01 03 04 00 64 00 65 7B C7`. Press Tab, select offset 3 and width 2: big-endian uint16 shows 100, and CRC16 Modbus for the entire frame shows OK.
-3. Press Esc to close the inspector. Change the request to `02 03 00 00 00 02`, use Ctrl-K to append the CRC, and send it. Inspect the deliberately corrupted response checksum.
-4. Change the request to `03 03 00 00 00 02` and append a new CRC. The same framing rule combines the two reads into one frame.
-5. Use `--record` to save the session, then view it offline with `xserial replay session.xsr --hexdump --frame modbus-read`.
+1. Connect a Modbus device and run `xserial /dev/ttyUSB0 9600 --workbench --frame modbus-read --record session.xsr`, adjusting the port and serial settings to match the device.
+2. For a device at address 1 that supports reading two holding registers starting at address 0, enter `01 03 00 00 00 02 C4 0B` and press Enter. Adjust the address and register range for your device and use Ctrl-K to append CRC16 Modbus to the payload.
+3. Press Tab to inspect a response. Select offset 3 and width 2 to interpret the first register as a big-endian uint16; the inspector also reports the checksum of the entire frame.
+4. After closing the session, view the recording with `xserial replay session.xsr --hexdump --frame modbus-read`.
+
+For an offline example, run `xserial replay examples/modbus/demo.xsr --hexdump --frame modbus-read`. Its recorded response is `01 03 04 00 64 00 65 7B C7`, containing register values 100 and 101. Replay displays recorded traffic without sending commands to a device.
 
 For CRC and protocol fields, see the [Modbus Serial Line Guide V1.02](https://www.modbus.org/file/secure/modbusoverserial.pdf). This example covers manual sending, field interpretation, and checksum verification.
 

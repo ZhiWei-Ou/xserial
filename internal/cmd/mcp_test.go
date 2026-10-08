@@ -30,7 +30,7 @@ func TestMain(m *testing.M) {
 	if os.Getenv("XSERIAL_MCP_TEST_PROCESS") == "1" && len(os.Args) > 2 && os.Args[1] == "test-terminal" {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		debug := debugsession.New(debugsession.Connection{})
-		publication, err := mcpdaemon.Publish(ctx, mcpdaemon.Options{StateDir: os.Args[2], Demo: true}, debug)
+		publication, err := mcpdaemon.Publish(ctx, mcpdaemon.Options{StateDir: os.Args[2]}, debug)
 		if err == nil {
 			ready := make(chan middleware.Endpoint, 1)
 			err = middleware.New(middleware.Config{Port: demo.NewPort(), Debug: debug, Connection: middleware.ConnectionConfig{PortName: "child-terminal", BaudRate: 115200, DataBits: 8, Parity: "none", StopBits: "1"}, Frontend: mcpFrontend{ready}}).Run(ctx)
@@ -63,7 +63,7 @@ func connectBridge(ctx context.Context, dir string) (*mcp.ClientSession, error) 
 	if err != nil {
 		return nil, err
 	}
-	command := exec.Command(executable, "mcp", "--transport", "stdio", "--url", "http://127.0.0.1:0/mcp", "--demo", "--state-dir", dir)
+	command := exec.Command(executable, "mcp", "--transport", "stdio", "--url", "http://127.0.0.1:0/mcp", "--state-dir", dir)
 	command.Env = append(os.Environ(), "XSERIAL_MCP_TEST_PROCESS=1")
 	stderr, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 	if err != nil {
@@ -108,7 +108,7 @@ func (f mcpFrontend) Run(_ context.Context, e middleware.Endpoint) error {
 func testTerminal(t *testing.T, dir string) (*debugsession.Session, middleware.Endpoint) {
 	t.Helper()
 	debug := debugsession.New(debugsession.Connection{})
-	publication, err := mcpdaemon.Publish(context.Background(), mcpdaemon.Options{StateDir: dir, Demo: true}, debug)
+	publication, err := mcpdaemon.Publish(context.Background(), mcpdaemon.Options{StateDir: dir}, debug)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestMCPConcurrentStdioStartupAndSharedTerminal(t *testing.T) {
 	defer cancel()
 	dir := filepath.Join(t.TempDir(), "state")
 	_, terminal := testTerminal(t, dir)
-	opts := mcpdaemon.Options{StateDir: dir, Demo: true}
+	opts := mcpdaemon.Options{StateDir: dir}
 	var workers sync.WaitGroup
 	sessions := make([]*mcp.ClientSession, 3)
 	errs := make([]error, 3)
@@ -229,7 +229,7 @@ func TestMCPDaemonCrashRetainsTerminalIdentityAndCursor(t *testing.T) {
 	defer cancel()
 	dir := filepath.Join(t.TempDir(), "state")
 	debug, terminal := testTerminal(t, dir)
-	opts := mcpdaemon.Options{StateDir: dir, Demo: true}
+	opts := mcpdaemon.Options{StateDir: dir}
 	session, err := connectBridge(ctx, dir)
 	if err != nil {
 		t.Fatal(err)
@@ -324,7 +324,7 @@ func TestAbnormalTerminalExitDetachesWithoutTrustingStalePID(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer bridge.Close()
-	opts := mcpdaemon.Options{StateDir: dir, Demo: true}
+	opts := mcpdaemon.Options{StateDir: dir}
 	t.Cleanup(func() {
 		if err := mcpdaemon.Stop(context.Background(), opts); err != nil {
 			t.Error(err)
@@ -366,7 +366,7 @@ func TestReusedStdioBridgePrintsAuditOnlyToStderr(t *testing.T) {
 	}
 	defer starter.Close()
 	t.Cleanup(func() {
-		if err := mcpdaemon.Stop(context.Background(), mcpdaemon.Options{StateDir: dir, Demo: true}); err != nil {
+		if err := mcpdaemon.Stop(context.Background(), mcpdaemon.Options{StateDir: dir}); err != nil {
 			t.Error(err)
 		}
 	})
@@ -380,7 +380,7 @@ func TestReusedStdioBridgePrintsAuditOnlyToStderr(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer capture.Close()
-	command := exec.Command(executable, "mcp", "--transport", "stdio", "--demo", "--state-dir", dir)
+	command := exec.Command(executable, "mcp", "--transport", "stdio", "--state-dir", dir)
 	command.Env = append(os.Environ(), "XSERIAL_MCP_TEST_PROCESS=1")
 	command.Stderr = capture
 	session, err := mcp.NewClient(&mcp.Implementation{Name: "audit-observer", Version: "test"}, nil).Connect(ctx, &mcp.CommandTransport{Command: command, TerminateDuration: time.Second}, nil)

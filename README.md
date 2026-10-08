@@ -42,7 +42,7 @@ https://github.com/user-attachments/assets/0abb2e41-440a-4888-a991-1f1b4079d223
 - 🤖 **AI via MCP** — Read device output and send exact bytes over HTTP or stdio.
 - 🖥️ **Serial terminal** — RawUI, full-screen TUI, Hexdump, reconnection, logs, and YMODEM.
 - 🔬 **Binary debugging** — Hex editing, field inspection, checksums, framing, and command favorites.
-- 📝 **Offline analysis** — Record, replay, search, mark, and export traffic. Try the built-in demo without hardware.
+- 📝 **Offline analysis** — Record, replay, search, mark, and export traffic.
 
 ## Quick Start
 
@@ -83,7 +83,6 @@ See the [MCP guide](docs/mcp.md) for setup.
 | --- | --- |
 | Full-screen console (Beta) | `xserial /dev/ttyUSB0 --TUI` |
 | Binary workbench | `xserial /dev/ttyUSB0 --workbench` |
-| Hardware-free demo | `xserial demo --frame modbus-read` |
 | Hexdump with timestamps | `xserial /dev/ttyUSB0 --hexdump --time` |
 | Receive log | `xserial /dev/ttyUSB0 --log device.log` |
 | Record / replay | `xserial /dev/ttyUSB0 --record session.xsr` / `xserial replay session.xsr` |

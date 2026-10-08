@@ -242,23 +242,3 @@ MCP audit records appear on the MCP daemon or stdio bridge's stderr.
 RawUI, TUI and workbench leave auditing to MCP and display only their own
 local session output.
 Device stdout and stdio MCP stdout remain their respective data channels.
-
-## Try without hardware
-
-Run `xserial demo` for an interactive simulated workbench, then connect MCP
-with `xserial mcp --demo --url http://127.0.0.1:8766/mcp`. The demo namespace
-uses `xserial/mcp-demo`; choose a separate port if the ordinary daemon is running.
-The daemon attaches the demo terminal rather than creating its own device.
-Stdio clients can use `["mcp", "--transport", "stdio", "--demo", "--url",
-"http://127.0.0.1:8766/mcp"]`.
-
-Call `serial_status`, then send this query with `encoding: "hex"`:
-
-```text
-01 03 00 00 00 02 C4 0B
-```
-
-Read from the send cursor and decode `data_base64` to inspect the response.
-Addresses 02, 03 and 04 demonstrate bad CRC, split responses and joined responses.
-Demo mode models a binary device, not a POSIX shell. Use `xserial mcp --demo
-status` and `xserial mcp --demo stop` to manage only its MCP access.

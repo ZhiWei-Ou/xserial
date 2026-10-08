@@ -83,7 +83,6 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "show version and build summary")
 	rootCmd.AddCommand(newListCommand(deps.list))
 	rootCmd.AddCommand(newVersionCommand(version))
-	rootCmd.AddCommand(newDemoCommand())
 	rootCmd.AddCommand(newReplayCommand(), newExportCommand())
 	rootCmd.AddCommand(newMCPCommand())
 	return rootCmd

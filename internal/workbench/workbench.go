@@ -23,7 +23,6 @@ type Config struct {
 	Connection    middleware.ConnectionConfig
 	FavoritesPath string
 	Favorites     []Favorite
-	Demo          bool
 	Framing       hexdata.FrameConfig
 	Recorder      *capture.Writer
 }

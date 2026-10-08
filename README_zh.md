@@ -42,7 +42,7 @@ https://github.com/user-attachments/assets/0abb2e41-440a-4888-a991-1f1b4079d223
 - 🤖 **AI 接入** — 通过 HTTP 或 stdio MCP 读取设备输出、发送精确字节。
 - 🖥️ **串口终端** — RawUI、全屏 TUI、Hexdump、自动重连、日志与 YMODEM。
 - 🔬 **二进制调试** — Hex 编辑、字段检查、校验和、分帧与命令收藏。
-- 📝 **离线分析** — 录制、回放、搜索、标记和导出；内置 Demo，无需硬件即可体验。
+- 📝 **离线分析** — 录制、回放、搜索、标记和导出。
 
 ## 快速开始
 
@@ -83,7 +83,6 @@ xserial mcp
 | --- | --- |
 | 全屏控制台（Beta） | `xserial /dev/ttyUSB0 --TUI` |
 | 二进制工作台 | `xserial /dev/ttyUSB0 --workbench` |
-| 无需硬件的 Demo | `xserial demo --frame modbus-read` |
 | 带时间戳的 Hexdump | `xserial /dev/ttyUSB0 --hexdump --time` |
 | 接收日志 | `xserial /dev/ttyUSB0 --log device.log` |
 | 录制 / 回放 | `xserial /dev/ttyUSB0 --record session.xsr` / `xserial replay session.xsr` |

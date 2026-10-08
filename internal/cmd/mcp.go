@@ -54,7 +54,6 @@ func newMCPCommand() *cobra.Command {
 	}
 	cmd.PersistentFlags().StringVar(&opts.StateDir, "state-dir", "", "private session and daemon state directory (default: per-user cache)")
 	cmd.PersistentFlags().StringVar(&opts.URL, "url", mcpdaemon.DefaultURL, "local HTTP MCP URL")
-	cmd.PersistentFlags().BoolVar(&opts.Demo, "demo", false, "use the isolated demo session namespace")
 	cmd.Flags().StringVar(&transport, "transport", "http", "MCP transport: http or stdio")
 	cmd.AddCommand(&cobra.Command{
 		Use: "daemon", Short: "Run the unique MCP HTTP daemon in the foreground", Args: cobra.NoArgs,
@@ -90,8 +89,8 @@ func newMCPCommand() *cobra.Command {
 	return cmd
 }
 
-func publishTerminal(ctx context.Context, dir string, demo bool, debug *debugsession.Session) (*mcpdaemon.Publication, error) {
-	publication, err := mcpdaemon.Publish(ctx, mcpdaemon.Options{StateDir: dir, Demo: demo, Version: currentVersion()}, debug)
+func publishTerminal(ctx context.Context, dir string, debug *debugsession.Session) (*mcpdaemon.Publication, error) {
+	publication, err := mcpdaemon.Publish(ctx, mcpdaemon.Options{StateDir: dir, Version: currentVersion()}, debug)
 	if err != nil {
 		return nil, fmt.Errorf("publish terminal session: %w", err)
 	}

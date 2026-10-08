@@ -4,9 +4,8 @@
 
 ```bash
 xserial /dev/ttyUSB0 --record session.xsr
-xserial demo --snapshot --record demo.xsr
 xserial replay session.xsr
-xserial replay demo.xsr --hexdump --frame modbus-read
+xserial replay examples/modbus/demo.xsr --hexdump --frame modbus-read
 ```
 
 The first line contains `format=xserial-capture`, `version=1`, the start time, and serial configuration. Each subsequent line contains an event with a strictly increasing `seq`, observation time `at`, `kind`, and optional `data`, `request`, `error`, and `note` fields. Byte data is encoded as a Base64 JSON string.

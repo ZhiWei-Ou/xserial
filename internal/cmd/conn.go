@@ -238,7 +238,7 @@ func runConn(ctx context.Context, opts connOptions) (runErr error) {
 	}
 
 	debug := debugsession.New(debugsession.Connection{})
-	publication, publishErr := publishTerminal(ctx, opts.stateDir, false, debug)
+	publication, publishErr := publishTerminal(ctx, opts.stateDir, debug)
 	if publishErr != nil {
 		logger.Warn("mcp.publish_failed", "error", publishErr)
 	}

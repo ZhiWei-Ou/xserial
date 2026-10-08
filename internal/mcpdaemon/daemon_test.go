@@ -333,7 +333,7 @@ func TestCancelArrivingBeforeDispatchIsNotLost(t *testing.T) {
 
 func TestAuthenticationProtocolCompatibilityAndStaleMetadata(t *testing.T) {
 	opts := testOptions(t)
-	dir, err := StateDirectory(opts.StateDir, false)
+	dir, err := StateDirectory(opts.StateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,6 +354,11 @@ func TestAuthenticationProtocolCompatibilityAndStaleMetadata(t *testing.T) {
 		t.Fatal("unauthenticated peer accepted")
 	}
 	meta := client.Meta
+	meta.Demo = true
+	if _, err := connectEndpoint(context.Background(), meta); !errors.Is(err, ErrIncompatible) {
+		t.Fatalf("accepted simulated session descriptor: %v", err)
+	}
+	meta.Demo = false
 	meta.Protocol--
 	if err := writeMetadata(dir, meta); err != nil {
 		t.Fatal(err)
