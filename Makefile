@@ -22,7 +22,7 @@ test:
 build: dir
 	@ext=""; \
 	if [ "$$(go env GOOS)" = "windows" ]; then ext=".exe"; fi; \
-	go build -o $(EXE_PATH)/$(APP_NAME)$$ext $(APP_DIR)
+	CGO_ENABLED=0 go build -o $(EXE_PATH)/$(APP_NAME)$$ext $(APP_DIR)
 
 .PHONY: clean
 clean:
