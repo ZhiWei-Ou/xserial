@@ -173,7 +173,8 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 
 	state := inputNormal
 	ymodemMode := false
-	progressLineOpen := false
+	var progress transferProgress
+	defer progress.endLine(f.cfg.Local)
 	var path pathPrompt
 	escapeTimer := time.NewTimer(time.Hour)
 	escapeTimer.Stop()
@@ -230,27 +231,13 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 					return fmt.Errorf("write device output: %w", err)
 				}
 			case session.YMODEMProgress:
-				if event.Written == event.Total {
-					continue
-				}
-				progressLineOpen = true
-				action := "Sending"
-				if event.Direction == "download" {
-					action = "Receiving"
-				}
-				fmt.Fprintf(f.cfg.Local, "\r%s: %d/%d bytes", action, event.Written, event.Total)
+				progress.render(f.cfg.Local, event)
 			case session.YMODEMFrameRetry:
-				if progressLineOpen {
-					printLocalLine(f.cfg.Local, "")
-					progressLineOpen = false
-				}
+				progress.endLine(f.cfg.Local)
 				event.Acknowledge()
 			case session.YMODEMFinished:
 				ymodemMode = false
-				if progressLineOpen {
-					printLocalLine(f.cfg.Local, "")
-					progressLineOpen = false
-				}
+				progress.endLine(f.cfg.Local)
 				if errors.Is(event.Err, context.Canceled) {
 					printLocalLine(f.cfg.Local, fmt.Sprintf("YMODEM %s canceled", event.Direction))
 				} else if event.Err != nil {
@@ -304,6 +291,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 						fmt.Fprint(f.cfg.Local, "\r\n\x1b[?2004h")
 						path.render(f.cfg.Local)
 					case actionYMODEMDownload:
+						progress = transferProgress{started: time.Now()}
 						ymodemMode = true
 						printLocalLine(f.cfg.Local, "")
 						if err := endpoint.StartYMODEMDownload(ctx, "."); err != nil {
@@ -359,6 +347,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 						}
 					}
 					if err == nil {
+						progress = transferProgress{started: time.Now()}
 						err = endpoint.StartYMODEMUpload(ctx, name)
 					}
 					printLocalLine(f.cfg.Local, "")
@@ -375,6 +364,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 				if result.b == 0x1b {
 					endpoint.CancelTransfer()
 					state = inputCancellingTransfer
+					progress.endLine(f.cfg.Local)
 					printLocalLine(f.cfg.Local, "\rCanceling transfer")
 				}
 			case inputCancellingTransfer:
