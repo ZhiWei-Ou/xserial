@@ -13,7 +13,7 @@ import (
 
 func TestUploadPathEditingAndCompletion(t *testing.T) {
 	t.Chdir(t.TempDir())
-	for _, name := range []string{"firmware one.bin", "firmware two.bin", "固件.bin", ".hidden"} {
+	for _, name := range []string{"firmware one.bin", "firmware two.bin", "固件.bin", ".hidden", "Release.bin", "Äudio.bin", "MixedOne.bin", "mixedTwo.bin"} {
 		if err := os.WriteFile(name, []byte("firmware"), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -23,9 +23,14 @@ func TestUploadPathEditingAndCompletion(t *testing.T) {
 	}
 	for _, tc := range []struct{ name, input, want string }{
 		{"common prefix", "fi\t", "firmware "},
+		{"uppercase common prefix", "FI\t", "firmware "},
+		{"preserve filename case", "rel\t", "Release.bin"},
+		{"Unicode case", "äu\t", "Äudio.bin"},
+		{"ambiguous casing keeps input", "MIX\t\t", "MIX"},
 		{"space in filename", "firmware o\t", "firmware one.bin"},
 		{"quoted filename", "\"firmware o\t", "\"firmware one.bin\""},
 		{"directory", "bu\t", "build" + string(os.PathSeparator)},
+		{"uppercase directory", "BU\t", "build" + string(os.PathSeparator)},
 		{"UTF8 backspace", "固错\x7f件.b\t", "固件.bin"},
 		{"insert at cursor", "fime\x1b[D\x1b[Dr", "firme"},
 		{"delete home end", "XfirmwareX\x1b[H\x1b[3~\x1b[F\x7f", "firmware"},
@@ -48,11 +53,35 @@ func TestUploadPathEditingAndCompletion(t *testing.T) {
 	}
 	var p pathPrompt
 	var out bytes.Buffer
-	for _, b := range []byte("fi\t\t") {
+	for _, b := range []byte("FI\t\t") {
 		p.feed(b, &out)
 	}
 	if !strings.Contains(out.String(), "firmware one.bin\r\nfirmware two.bin\r\n") {
 		t.Fatalf("missing candidates: %q", out.String())
+	}
+}
+
+func TestUploadPathCaseCollision(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, name := range []string{"Firmware.bin", "firmware.bin"} {
+		if err := os.WriteFile(name, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Skip("filesystem does not support names differing only in case")
+	}
+	var p pathPrompt
+	var out bytes.Buffer
+	for _, b := range []byte("fir\t") {
+		p.feed(b, &out)
+	}
+	if string(p.line) != "fir" || !strings.Contains(out.String(), "Firmware.bin\r\nfirmware.bin\r\n") {
+		t.Fatalf("ambiguous completion: path=%q output=%q", string(p.line), out.String())
 	}
 }
 
@@ -78,7 +107,7 @@ func TestUploadFileSelectionRetriesAndKeepsKeysLocal(t *testing.T) {
 	var local bytes.Buffer
 	frontend := New(Config{
 		Terminal: &fakeTerminal{},
-		Input:    strings.NewReader("\x10\x15missing\r\x15固错\x7f件 o\t\x1b[D\x1b[C\r"),
+		Input:    strings.NewReader("\x10\x15missing\r\x15固错\x7f件 O\t\x1b[D\x1b[C\r"),
 		Output:   &bytes.Buffer{}, Local: &local,
 	})
 	if err := frontend.Run(ctx, endpoint); err != nil {

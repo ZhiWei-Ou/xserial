@@ -190,9 +190,10 @@ func completePath(value string) (string, []string, error) {
 		return quote + value, nil, err
 	}
 	var matches []string
+	foldedBase := strings.ToLower(base)
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasPrefix(name, base) || (strings.HasPrefix(name, ".") && !strings.HasPrefix(base, ".")) {
+		if !strings.HasPrefix(strings.ToLower(name), foldedBase) || (strings.HasPrefix(name, ".") && !strings.HasPrefix(base, ".")) {
 			continue
 		}
 		info, err := os.Stat(filepath.Join(lookup, name))
@@ -219,6 +220,10 @@ func completePath(value string) (string, []string, error) {
 			n++
 		}
 		common = common[:n]
+	}
+	// Keep ambiguous casing editable instead of choosing a candidate or erasing input.
+	if len(matches) > 1 && len(common) < len([]rune(base)) {
+		return quote + value, matches, nil
 	}
 	result := quote + dir + string(common)
 	if len(matches) == 1 && quote != "" && !strings.HasSuffix(matches[0], string(os.PathSeparator)) {
