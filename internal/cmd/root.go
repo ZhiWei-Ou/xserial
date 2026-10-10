@@ -47,6 +47,13 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 		SilenceErrors:         true,
 		SilenceUsage:          true,
 		Args:                  cobra.MaximumNArgs(2),
+		ValidArgsFunction: func(_ *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+			if len(args) == 0 {
+				// Let the shell complete device paths alongside subcommands.
+				return nil, cobra.ShellCompDirectiveDefault
+			}
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if showVersion {
 				info, ok := debug.ReadBuildInfo()

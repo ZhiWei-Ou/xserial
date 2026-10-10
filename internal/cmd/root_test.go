@@ -54,6 +54,39 @@ func TestRootWithoutPositionalsShowsHelp(t *testing.T) {
 	}
 }
 
+func TestRootShellCompletion(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"port path", []string{"/dev/cu."}, ":0\n"},
+		{"port path after flag", []string{"--time", "/dev/cu."}, ":0\n"},
+		{"serial config", []string{"/dev/cu.test", "115"}, ":4\n"},
+		{"subcommand", []string{"ver"}, "version\tShow version\n:0\n"},
+		{"flag", []string{"--vers"}, "--version\tshow version and build summary\n:4\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCommand(rootDependencies{
+				conn: func(context.Context, connOptions) error {
+					t.Fatal("completion must not open a port")
+					return nil
+				},
+			})
+			var output bytes.Buffer
+			cmd.SetOut(&output)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs(append([]string{"__complete"}, tt.args...))
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			if got := output.String(); got != tt.want {
+				t.Fatalf("completion output = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestListCommandListsPorts(t *testing.T) {
 	connected := false
 	cmd := newRootCommand(rootDependencies{
