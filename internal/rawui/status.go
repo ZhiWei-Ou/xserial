@@ -196,6 +196,7 @@ func (b *StatusBar) view(now time.Time) string {
 	settings += stats
 	port = filepath.Base(port)
 	right, compact := b.tip(now)
+	right, compact = "Tip: "+right, "Tip: "+compact
 	if b.state != "Connected" {
 		right, compact = b.state, b.state
 	}
