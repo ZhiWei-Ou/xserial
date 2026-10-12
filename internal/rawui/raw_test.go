@@ -350,7 +350,7 @@ func TestRawFrontendDisplaysConciseYMODEMResult(t *testing.T) {
 	if err := frontend.Run(ctx, endpoint); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	want := "Sent README.md (6913 bytes, CRC32 1234abcd, 2 retries)\r\n"
+	want := "✓ Sent README.md  ·  6.8 KiB  ·  CRC32 1234abcd  ·  2 retries\r\n"
 	if got := local.String(); got != want {
 		t.Fatalf("local output = %q, want %q", got, want)
 	}

@@ -183,7 +183,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 		ymodemMode = false
 		state = inputNormal
 		fmt.Fprint(f.cfg.Local, "\x1b[?2004l\r\n")
-		printLocalLine(f.cfg.Local, "File selection canceled")
+		printLocalLine(f.cfg.Local, localColor("File selection canceled", localWarningColor))
 	}
 	defer func() {
 		if state == inputYMODEMUploadPath {
@@ -237,14 +237,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 				event.Acknowledge()
 			case session.YMODEMFinished:
 				ymodemMode = false
-				progress.endLine(f.cfg.Local)
-				if errors.Is(event.Err, context.Canceled) {
-					printLocalLine(f.cfg.Local, fmt.Sprintf("YMODEM %s canceled", event.Direction))
-				} else if event.Err != nil {
-					printLocalLine(f.cfg.Local, fmt.Sprintf("YMODEM %s failed: %v", event.Direction, event.Err))
-				} else {
-					printLocalLine(f.cfg.Local, formatYMODEMResult(event))
-				}
+				progress.finish(f.cfg.Local, event)
 				state = inputNormal
 				requestRead()
 			}
@@ -296,10 +289,10 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 						printLocalLine(f.cfg.Local, "")
 						if err := endpoint.StartYMODEMDownload(ctx, "."); err != nil {
 							ymodemMode = false
-							printLocalLine(f.cfg.Local, fmt.Sprintf("YMODEM download failed: %v", err))
+							printLocalLine(f.cfg.Local, localColor(fmt.Sprintf("YMODEM download failed: %v", err), localErrorColor))
 						} else {
 							state = inputYMODEMTransfer
-							printLocalLine(f.cfg.Local, "Waiting for sender (Esc to cancel)")
+							printLocalLine(f.cfg.Local, localColor("Waiting for sender (Esc to cancel)", localInfoColor))
 						}
 					case actionQuit:
 						printLocalLine(f.cfg.Local, "")
@@ -352,12 +345,12 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 					}
 					printLocalLine(f.cfg.Local, "")
 					if err != nil {
-						printLocalLine(f.cfg.Local, fmt.Sprintf("YMODEM upload failed: %v", err))
+						printLocalLine(f.cfg.Local, localColor(fmt.Sprintf("YMODEM upload failed: %v", err), localErrorColor))
 						path.render(f.cfg.Local)
 					} else {
 						fmt.Fprint(f.cfg.Local, "\x1b[?2004l")
 						state = inputYMODEMTransfer
-						printLocalLine(f.cfg.Local, "Waiting for receiver (Esc to cancel)")
+						printLocalLine(f.cfg.Local, localColor("Waiting for receiver (Esc to cancel)", localInfoColor))
 					}
 				}
 			case inputYMODEMTransfer:
@@ -365,7 +358,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 					endpoint.CancelTransfer()
 					state = inputCancellingTransfer
 					progress.endLine(f.cfg.Local)
-					printLocalLine(f.cfg.Local, "\rCanceling transfer")
+					printLocalLine(f.cfg.Local, localColor("\rCanceling transfer", localWarningColor))
 				}
 			case inputCancellingTransfer:
 			}
@@ -393,11 +386,11 @@ func formatYMODEMResult(event session.YMODEMFinished) string {
 		action = "Received"
 	}
 	name := filepath.Base(event.Path)
-	result := fmt.Sprintf("%s %s (%d bytes, CRC32 %08x", action, name, event.Bytes, event.CRC32)
+	result := fmt.Sprintf("✓ %s %s  ·  %s  ·  CRC32 %08x", action, name, transferSize(float64(event.Bytes)), event.CRC32)
 	if event.RetriedFrames > 0 {
-		result += fmt.Sprintf(", %d retries", event.RetriedFrames)
+		result += fmt.Sprintf("  ·  %d retries", event.RetriedFrames)
 	}
-	return result + ")"
+	return result
 }
 
 func findLocalCommand(key byte) (localCommand, bool) {

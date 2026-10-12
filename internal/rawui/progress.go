@@ -1,10 +1,11 @@
 package rawui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/progress"
@@ -29,47 +30,117 @@ func (p *transferProgress) render(w io.Writer, event session.YMODEMProgress) {
 		return
 	}
 	p.lastDraw = now
+	width := 80
+	if columns, _, err := term.GetSize(int(os.Stderr.Fd())); err == nil && columns > 0 {
+		width = columns
+	}
+	line := p.view(event, now, width-1)
+	if !localColorsEnabled() {
+		line = ansi.Strip(line)
+	}
+	fmt.Fprintf(w, "\r\x1b[2K%s", line)
+	p.open = true
+}
+
+// view reserves space for the percentage separately from the bar and drops
+// optional fields before shortening the bar below a useful width.
+func (p *transferProgress) view(event session.YMODEMProgress, now time.Time, width int) string {
 	action := "Sending"
 	if event.Direction == "download" {
 		action = "Receiving"
 	}
 	amount := transferSize(float64(event.Written))
 	if event.Total > 0 {
-		amount += " / " + transferSize(float64(event.Total))
+		scale, unit := float64(1), "B"
+		for _, candidate := range []string{"KiB", "MiB", "GiB"} {
+			if float64(event.Total)/scale < 1024 {
+				break
+			}
+			scale *= 1024
+			unit = candidate
+		}
+		precision := 0
+		if scale > 1 && float64(event.Total)/scale < 100 {
+			precision = 1
+		}
+		total := fmt.Sprintf("%.*f", precision, float64(event.Total)/scale)
+		amount = fmt.Sprintf("%*.*f / %s %s", len(total), precision, float64(event.Written)/scale, total, unit)
 	}
-	details := amount
+	speedText, eta := "         —/s", "ETA     —"
 	if elapsed := now.Sub(p.started).Seconds(); elapsed >= 0.5 && event.Written > 0 {
 		speed := float64(event.Written) / elapsed
-		details += "  " + transferSize(speed) + "/s"
+		speedText = fmt.Sprintf("%12s", transferSize(speed)+"/s")
 		if event.Total > event.Written {
-			remaining := time.Duration(float64(event.Total-event.Written)/speed) * time.Second
-			details += "  ETA " + remaining.String()
+			remaining := time.Duration(float64(event.Total-event.Written) / speed * float64(time.Second))
+			eta = fmt.Sprintf("ETA %5s", remaining.Round(time.Second).String())
 		}
 	}
-	width := 80
-	if columns, _, err := term.GetSize(int(os.Stderr.Fd())); err == nil && columns > 0 {
-		width = columns
+	if event.Total > 0 && event.Written >= event.Total {
+		eta = "Finishing"
 	}
-	barWidth := min(32, width-ansi.StringWidth(action+details)-5)
-	if barWidth < 12 {
-		details = amount
-		barWidth = min(32, width-ansi.StringWidth(action+details)-5)
-	}
-	line := action + "  " + details
+	percent := float64(0)
+	percentText := ""
 	if event.Total > 0 {
-		percent := min(1, max(0, float64(event.Written)/float64(event.Total)))
-		if barWidth >= 12 {
-			bar := progress.New(progress.WithColors(lipgloss.Color("#FDBA74"), lipgloss.Color("#EA580C")), progress.WithWidth(barWidth))
-			line = action + "  " + bar.ViewAs(percent) + "  " + details
-		} else {
-			line = fmt.Sprintf("%s  %.0f%%  %s", action, percent*100, details)
+		percent = min(1, max(0, float64(event.Written)/float64(event.Total)))
+		percentText = fmt.Sprintf("%3.0f%%", percent*100)
+	}
+	details := amount + "  " + speedText + "  " + eta
+	barWidth := func() int {
+		return min(28, width-ansi.StringWidth(action+percentText+details)-6)
+	}
+	if barWidth() < 12 {
+		details = amount + "  " + speedText
+	}
+	if barWidth() < 12 {
+		details = speedText
+	}
+	if event.Total <= 0 {
+		details = amount + "  " + speedText
+		if ansi.StringWidth(action+details)+2 > width {
+			details = amount
+		}
+	} else if ansi.StringWidth(action+percentText+details)+4 > width {
+		details = ""
+	}
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
+	line := lipgloss.NewStyle().Foreground(lipgloss.Color(localInfoColor)).Render(action) + "  "
+	if event.Total > 0 {
+		if barWidth() >= 12 {
+			bar := progress.New(progress.WithColors(lipgloss.Color("#60A5FA")),
+				progress.WithFillCharacters('━', '─'), progress.WithoutPercentage(), progress.WithWidth(barWidth()))
+			bar.EmptyColor = lipgloss.Color("#555555")
+			line += bar.ViewAs(percent) + "  "
+		}
+		line += percentText
+		if details != "" {
+			line += "  "
 		}
 	}
-	if os.Getenv("NO_COLOR") != "" || strings.EqualFold(os.Getenv("TERM"), "dumb") || !term.IsTerminal(int(os.Stderr.Fd())) {
-		line = ansi.Strip(line)
+	line += muted.Render(details)
+	return ansi.Truncate(line, max(1, width), "…")
+}
+
+func (p *transferProgress) finish(w io.Writer, event session.YMODEMFinished) {
+	if p.open {
+		fmt.Fprint(w, "\r\x1b[2K")
+		p.open = false
 	}
-	fmt.Fprintf(w, "\r\x1b[2K%s", ansi.Truncate(line, max(1, width-1), "…"))
-	p.open = true
+	result := formatYMODEMResult(event)
+	color := localSuccessColor
+	if errors.Is(event.Err, context.Canceled) {
+		color = localWarningColor
+		result = fmt.Sprintf("– YMODEM %s canceled", event.Direction)
+	} else if event.Err != nil {
+		color = localErrorColor
+		result = fmt.Sprintf("✗ YMODEM %s failed: %v", event.Direction, event.Err)
+	} else if !p.started.IsZero() {
+		elapsed := time.Since(p.started)
+		result += "  ·  " + elapsed.Round(time.Second).String()
+		if elapsed > 0 {
+			result += "  ·  " + transferSize(float64(event.Bytes)/elapsed.Seconds()) + "/s"
+		}
+	}
+	printLocalLine(w, localColor(result, color))
 }
 
 func (p *transferProgress) endLine(w io.Writer) {

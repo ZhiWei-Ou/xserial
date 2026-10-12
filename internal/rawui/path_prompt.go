@@ -39,7 +39,7 @@ func (p *pathPrompt) render(w io.Writer) {
 		start++
 	}
 	visible := ansi.Truncate(string(p.line[start:]), room, "")
-	fmt.Fprintf(w, "\r\x1b[2K%s%s\r", label, visible)
+	fmt.Fprintf(w, "\r\x1b[2K%s%s\r", localColor(label, localInfoColor), visible)
 	if col := ansi.StringWidth(label) + ansi.StringWidth(string(p.line[start:p.cursor])); col > 0 {
 		fmt.Fprintf(w, "\x1b[%dC", col)
 	}
