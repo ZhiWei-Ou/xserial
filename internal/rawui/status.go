@@ -3,6 +3,7 @@ package rawui
 import (
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,8 +31,9 @@ type StatusBar struct {
 	width, height int
 	cfg           session.ConnectionConfig
 	state         string
-	progress      *session.YMODEMProgress
-	started       time.Time
+	mode          inputState
+	tipIndex      int
+	tipChanged    time.Time
 	color         bool
 }
 
@@ -79,15 +81,6 @@ func (b *StatusBar) start(cfg session.ConnectionConfig) error {
 	defer b.mu.Unlock()
 	b.cfg, b.state = cfg, "Connected"
 	return b.resizeLocked()
-}
-
-func (b *StatusBar) enabled() bool {
-	if b == nil {
-		return false
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.active
 }
 
 // refresh also detects size changes on platforms without SIGWINCH.
@@ -149,7 +142,7 @@ func (b *StatusBar) close() error {
 	return err
 }
 
-func (b *StatusBar) update(state string, progress *session.YMODEMProgress, started time.Time) {
+func (b *StatusBar) update(state string, mode inputState) {
 	if b == nil {
 		return
 	}
@@ -158,7 +151,7 @@ func (b *StatusBar) update(state string, progress *session.YMODEMProgress, start
 	if state != "" {
 		b.state = state
 	}
-	b.progress, b.started = progress, started
+	b.mode = mode
 }
 
 func (b *StatusBar) drawLocked() error {
@@ -184,20 +177,7 @@ func (b *StatusBar) view(now time.Time) string {
 	}
 	settings := fmt.Sprintf(" · %d · %d%s%s", b.cfg.BaudRate, b.cfg.DataBits, parity, b.cfg.StopBits)
 	port = filepath.Base(port)
-	right, compact := "", ""
-	if p := b.progress; p != nil {
-		right = "↑"
-		if p.Direction == "download" {
-			right = "↓"
-		}
-		if p.Total > 0 {
-			right += fmt.Sprintf(" %.0f%%", min(100, max(0, 100*float64(p.Written)/float64(p.Total))))
-		}
-		compact = right
-		if elapsed := now.Sub(b.started).Seconds(); !b.started.IsZero() && elapsed >= 0.5 {
-			right += " · " + transferSize(float64(p.Written)/elapsed) + "/s"
-		}
-	}
+	right, compact := b.tip(now)
 	if b.state != "Connected" {
 		right, compact = b.state, b.state
 	}
@@ -225,9 +205,37 @@ func (b *StatusBar) view(now time.Time) string {
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B"))
 	label := lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8"))
 	left = ansi.Truncate(label.Render(port)+muted.Render(settings), available, "…")
-	rightStyle := muted
+	rightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
 	if b.state != "Connected" {
 		rightStyle = rightStyle.Foreground(lipgloss.Color(localWarningColor))
 	}
 	return left + gap + rightStyle.Render(right)
+}
+
+var normalTips = []string{
+	"Ctrl-P h: help",
+	"Ctrl-P i: port info",
+	"Ctrl-P Ctrl-U: upload file",
+	"Ctrl-P Ctrl-D: receive file",
+	"Ctrl-P q: quit",
+}
+
+// Tips change slowly and never repeat immediately, regardless of output rate.
+func (b *StatusBar) tip(now time.Time) (string, string) {
+	switch b.mode {
+	case inputYMODEMUploadPath:
+		return "Tab: complete · Ctrl-C: clear · Enter: send · Esc: cancel", "Tab · Ctrl-C clear · Enter send · Esc cancel"
+	case inputYMODEMTransfer:
+		return "Esc: cancel transfer", "Esc: cancel"
+	case inputCancellingTransfer:
+		return "Canceling transfer…", "Canceling…"
+	}
+	if b.tipChanged.IsZero() {
+		b.tipIndex = rand.IntN(len(normalTips))
+		b.tipChanged = now
+	} else if now.Sub(b.tipChanged) >= 8*time.Second {
+		b.tipIndex = (b.tipIndex + 1 + rand.IntN(len(normalTips)-1)) % len(normalTips)
+		b.tipChanged = now
+	}
+	return normalTips[b.tipIndex], normalTips[b.tipIndex]
 }

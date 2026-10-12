@@ -2,6 +2,7 @@ package rawui
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"strings"
@@ -23,7 +24,7 @@ func TestStatusBarLifecycleAndResize(t *testing.T) {
 	if got := out.String(); !strings.Contains(got, "\x1b[1;23r") || !strings.Contains(got, "115200 · 8N1") || strings.Contains(got, "1049") {
 		t.Fatalf("initial screen: %q", got)
 	}
-	b.update("Reconnecting", nil, time.Time{})
+	b.update("Reconnecting", inputNormal)
 	out.Reset()
 	if _, err := b.refresh(); err != nil {
 		t.Fatal(err)
@@ -47,17 +48,17 @@ func TestStatusBarLifecycleAndResize(t *testing.T) {
 
 }
 
-func TestStatusBarLayoutAndTransfer(t *testing.T) {
+func TestStatusBarLayoutAndTips(t *testing.T) {
 	now := time.Now()
-	b := &StatusBar{state: "Connected", cfg: session.ConnectionConfig{PortName: "/dev/cu.usbserial-long-device-name", BaudRate: 115200, DataBits: 8, Parity: "none", StopBits: "1"}, progress: &session.YMODEMProgress{Written: 1024, Total: 2048}, started: now.Add(-time.Second)}
+	b := &StatusBar{state: "Connected", cfg: session.ConnectionConfig{PortName: "/dev/cu.usbserial-long-device-name", BaudRate: 115200, DataBits: 8, Parity: "none", StopBits: "1"}, mode: inputYMODEMTransfer}
 	for _, width := range []int{120, 80, 60, 40, 20} {
 		b.width = width
 		line := ansi.Strip(b.view(now))
 		if ansi.StringWidth(line) >= width {
 			t.Fatalf("width %d: %q", width, line)
 		}
-		if width >= 60 && (!strings.Contains(line, "50%") || !strings.Contains(line, "115200")) {
-			t.Fatalf("width %d loses transfer/config: %q", width, line)
+		if width >= 60 && (!strings.Contains(line, "Esc: cancel") || !strings.Contains(line, "115200")) {
+			t.Fatalf("width %d loses tip/config: %q", width, line)
 		}
 		t.Logf("%d: %s", width, line)
 	}
@@ -109,7 +110,7 @@ func TestStatusBarDisabledForRedirectedOutput(t *testing.T) {
 	if err := b.start(session.ConnectionConfig{}); err != nil {
 		t.Fatal(err)
 	}
-	if b.enabled() {
+	if b.active {
 		t.Fatal("enabled on redirected output")
 	}
 	want := []byte("\x1b[31mdevice\r\n")
@@ -126,5 +127,58 @@ func TestStatusBarDisabledForRedirectedOutput(t *testing.T) {
 	got, err = os.ReadFile(local.Name())
 	if err != nil || len(got) != 0 {
 		t.Fatalf("local %q error %v", got, err)
+	}
+}
+
+func TestStatusBarTipsFollowModeAndRemainReadable(t *testing.T) {
+	now := time.Now()
+	b := &StatusBar{}
+	first, _ := b.tip(now)
+	if next, _ := b.tip(now.Add(time.Second)); next != first {
+		t.Fatal("tip changed during normal refresh")
+	}
+	if next, _ := b.tip(now.Add(8 * time.Second)); next == first {
+		t.Fatal("tip repeated immediately")
+	}
+	b.update("Connected", inputYMODEMUploadPath)
+	selection, _ := b.tip(now)
+	for _, key := range []string{"Tab", "Ctrl-C", "Enter", "Esc"} {
+		if !strings.Contains(selection, key) {
+			t.Fatalf("missing %s in %q", key, selection)
+		}
+	}
+	b.update("", inputYMODEMTransfer)
+	if tip, _ := b.tip(now); tip != "Esc: cancel transfer" {
+		t.Fatalf("transfer tip: %q", tip)
+	}
+	b.update("", inputNormal)
+	if tip, _ := b.tip(now); !strings.HasPrefix(tip, "Ctrl-P") {
+		t.Fatalf("normal tip: %q", tip)
+	}
+}
+
+func TestYMODEMProgressRemainsSeparateFromStatusBar(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	endpoint := &fakeEndpoint{events: make(chan session.Event, 1), cancel: cancel}
+	endpoint.events <- session.YMODEMProgress{Direction: "upload", Written: 1024, Total: 2048}
+	close(endpoint.events)
+	input, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer writer.Close()
+	var local, footer bytes.Buffer
+	bar := &StatusBar{dst: &footer, parser: ansi.NewParser(), size: func() (int, int, error) { return 80, 24, nil }}
+	frontend := New(Config{Terminal: &fakeTerminal{}, Input: input, Output: &bytes.Buffer{}, Local: &local, StatusBar: bar})
+	if err := frontend.Run(ctx, endpoint); err != nil {
+		t.Fatal(err)
+	}
+	if line := ansi.Strip(local.String()); !strings.Contains(line, "Sending") || !strings.Contains(line, "50%") {
+		t.Fatalf("missing independent progress: %q", line)
+	}
+	if strings.Contains(footer.String(), "50%") {
+		t.Fatal("progress duplicated in status bar")
 	}
 }

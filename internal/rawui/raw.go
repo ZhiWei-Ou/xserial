@@ -196,7 +196,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 	cancelSelection := func() {
 		ymodemMode = false
 		state = inputNormal
-		bar.update("", nil, time.Time{})
+		bar.update("", state)
 		fmt.Fprint(f.cfg.Local, "\x1b[?2004l\r\n")
 		printLocalLine(f.cfg.Local, localColor("File selection canceled", localWarningColor))
 	}
@@ -248,11 +248,11 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 			}
 			switch event := event.(type) {
 			case session.Disconnected:
-				bar.update("Disconnected", nil, time.Time{})
+				bar.update("Disconnected", state)
 			case session.Reconnecting:
-				bar.update("Reconnecting", nil, time.Time{})
+				bar.update("Reconnecting", state)
 			case session.Reconnected:
-				bar.update("Connected", nil, time.Time{})
+				bar.update("Connected", state)
 			case session.Received:
 				if ymodemMode {
 					continue
@@ -261,19 +261,15 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 					return fmt.Errorf("write device output: %w", err)
 				}
 			case session.YMODEMProgress:
-				if bar.enabled() {
-					bar.update("", &event, progress.started)
-				} else {
-					progress.render(f.cfg.Local, event)
-				}
+				progress.render(f.cfg.Local, event)
 			case session.YMODEMFrameRetry:
 				progress.endLine(f.cfg.Local)
 				event.Acknowledge()
 			case session.YMODEMFinished:
 				ymodemMode = false
-				bar.update("", nil, time.Time{})
-				progress.finish(f.cfg.Local, event)
 				state = inputNormal
+				bar.update("", state)
+				progress.finish(f.cfg.Local, event)
 				requestRead()
 			}
 		case result := <-input:
@@ -316,7 +312,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 							path.width, _, _ = term.GetSize(int(file.Fd()))
 						}
 						state = inputYMODEMUploadPath
-						bar.update("", nil, time.Time{})
+						bar.update("", state)
 						fmt.Fprint(f.cfg.Local, "\r\n\x1b[?2004h")
 						path.render(f.cfg.Local)
 					case actionYMODEMDownload:
@@ -328,7 +324,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 							printLocalLine(f.cfg.Local, localColor(fmt.Sprintf("YMODEM download failed: %v", err), localErrorColor))
 						} else {
 							state = inputYMODEMTransfer
-							bar.update("", nil, progress.started)
+							bar.update("", state)
 							printLocalLine(f.cfg.Local, localColor("Waiting for sender (Esc to cancel)", localInfoColor))
 						}
 					case actionQuit:
@@ -388,7 +384,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 						lastUploadPath = string(path.line)
 						fmt.Fprint(f.cfg.Local, "\x1b[?2004l")
 						state = inputYMODEMTransfer
-						bar.update("", nil, progress.started)
+						bar.update("", state)
 						printLocalLine(f.cfg.Local, localColor("Waiting for receiver (Esc to cancel)", localInfoColor))
 					}
 				}
@@ -396,7 +392,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 				if result.b == 0x1b {
 					endpoint.CancelTransfer()
 					state = inputCancellingTransfer
-					bar.update("", nil, time.Time{})
+					bar.update("", state)
 					progress.endLine(f.cfg.Local)
 					printLocalLine(f.cfg.Local, localColor("\rCanceling transfer", localWarningColor))
 				}
