@@ -21,7 +21,7 @@ func TestStatusBarLifecycleAndResize(t *testing.T) {
 	if err := b.start(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); !strings.Contains(got, "\x1b[1;23r") || !strings.Contains(got, "115200 · 8N1") || strings.Contains(got, "1049") {
+	if got := out.String(); !strings.Contains(got, "\x1b[1;23r") || !strings.Contains(got, "115200/8N1") || strings.Contains(got, "1049") {
 		t.Fatalf("initial screen: %q", got)
 	}
 	b.update("Reconnecting", inputNormal)
@@ -185,19 +185,22 @@ func TestYMODEMProgressRemainsSeparateFromStatusBar(t *testing.T) {
 
 func TestStatusBarTrafficAndWindowRate(t *testing.T) {
 	now := time.Now()
-	b := &StatusBar{state: "Connected", cfg: session.ConnectionConfig{PortName: "/dev/cu.usbserial", BaudRate: 115200, DataBits: 8, Parity: "none", StopBits: "1"}, samples: []trafficSample{{at: now.Add(-2 * time.Second)}}, traffic: func() (uint64, uint64) { return 1024, 3072 }}
+	b := &StatusBar{state: "Connected", cfg: session.ConnectionConfig{PortName: "/dev/cu.usbserial", BaudRate: 115200, DataBits: 8, Parity: "none", StopBits: "1"}, tipChanged: now, samples: []trafficSample{{at: now.Add(-2 * time.Second)}}, traffic: func() (uint64, uint64) { return 1024, 3072 }}
 	b.sampleTraffic(now)
-	for _, width := range []int{160, 100, 80, 60, 40, 20} {
+	for _, width := range []int{160, 100, 80, 60, 40, 20, 160} {
 		b.width = width
 		line := ansi.Strip(b.view(now))
 		if ansi.StringWidth(line) >= width {
 			t.Fatalf("width %d overflow: %q", width, line)
 		}
-		if width >= 80 && (!strings.Contains(line, "TX 1.0 KiB") || !strings.Contains(line, "RX 3.0 KiB")) {
-			t.Fatalf("missing totals: %q", line)
+		if width >= 100 && !strings.Contains(line, "cu.usbserial/115200/8N1 · TX 1.0 KiB | RX 3.0 KiB | RATE 2.0 KiB/s") {
+			t.Fatalf("missing device/runtime groups: %q", line)
 		}
-		if width >= 100 && !strings.Contains(line, "RATE 2.0 KiB/s") {
-			t.Fatalf("incorrect window rate: %q", line)
+		if width <= 60 && strings.Contains(line, "TX ") {
+			t.Fatalf("runtime should be hidden on narrow terminal: %q", line)
+		}
+		if strings.Contains(line, "TX ") != strings.Contains(line, "RATE 2.0 KiB/s") {
+			t.Fatalf("runtime must be shown as a whole: %q", line)
 		}
 		t.Logf("%d: %s", width, line)
 	}

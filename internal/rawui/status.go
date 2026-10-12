@@ -181,19 +181,7 @@ func (b *StatusBar) view(now time.Time) string {
 	if b.cfg.Parity != "" {
 		parity = strings.ToUpper(b.cfg.Parity[:1])
 	}
-	settings := fmt.Sprintf(" · %d · %d%s%s", b.cfg.BaudRate, b.cfg.DataBits, parity, b.cfg.StopBits)
-	stats, totals := "", ""
-	if b.traffic != nil {
-		totals = fmt.Sprintf(" | TX %s | RX %s", transferSize(float64(b.tx)), transferSize(float64(b.rx)))
-		stats = totals + " | RATE " + transferSize(b.rate) + "/s"
-		if ansi.StringWidth(settings+stats)+8 > width {
-			stats = totals
-		}
-		if ansi.StringWidth(settings+stats)+4 > width {
-			stats = ""
-		}
-	}
-	settings += stats
+	settings := fmt.Sprintf("/%d/%d%s%s", b.cfg.BaudRate, b.cfg.DataBits, parity, b.cfg.StopBits)
 	port = filepath.Base(port)
 	right, compact := b.tip(now)
 	right, compact = "Tip: "+right, "Tip: "+compact
@@ -210,6 +198,13 @@ func (b *StatusBar) view(now time.Time) string {
 		if available-ansi.StringWidth(settings) < 4 {
 			right = ""
 			available = width
+		}
+	}
+	if b.traffic != nil {
+		runtime := fmt.Sprintf(" · TX %s | RX %s | RATE %s/s",
+			transferSize(float64(b.tx)), transferSize(float64(b.rx)), transferSize(b.rate))
+		if ansi.StringWidth(port+settings+runtime) <= available {
+			settings += runtime
 		}
 	}
 	port = ansi.Truncate(port, max(1, available-ansi.StringWidth(settings)), "…")
