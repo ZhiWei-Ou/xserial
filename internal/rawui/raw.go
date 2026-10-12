@@ -176,6 +176,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 	var progress transferProgress
 	defer progress.endLine(f.cfg.Local)
 	var path pathPrompt
+	var lastUploadPath string
 	escapeTimer := time.NewTimer(time.Hour)
 	escapeTimer.Stop()
 	defer escapeTimer.Stop()
@@ -276,7 +277,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 						printHelp(f.cfg.Local)
 					case actionYMODEMUpload:
 						ymodemMode = true
-						path = pathPrompt{}
+						path = pathPrompt{line: []rune(lastUploadPath), cursor: len([]rune(lastUploadPath))}
 						if file, ok := f.cfg.Input.(*os.File); ok {
 							path.width, _, _ = term.GetSize(int(file.Fd()))
 						}
@@ -348,6 +349,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 						printLocalLine(f.cfg.Local, localColor(fmt.Sprintf("YMODEM upload failed: %v", err), localErrorColor))
 						path.render(f.cfg.Local)
 					} else {
+						lastUploadPath = string(path.line)
 						fmt.Fprint(f.cfg.Local, "\x1b[?2004l")
 						state = inputYMODEMTransfer
 						printLocalLine(f.cfg.Local, localColor("Waiting for receiver (Esc to cancel)", localInfoColor))

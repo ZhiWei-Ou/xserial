@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	session "github.com/ZhiWei-Ou/xserial/internal/middleware"
 )
@@ -124,5 +125,55 @@ func TestUploadFileSelectionRetriesAndKeepsKeysLocal(t *testing.T) {
 	}
 	if !strings.Contains(local.String(), "\x1b[?2004h") || !strings.Contains(local.String(), "\x1b[?2004l") {
 		t.Fatal("bracketed paste not restored")
+	}
+}
+
+func TestUploadPathReusedWithinSession(t *testing.T) {
+	t.Chdir(t.TempDir())
+	const name = "固件 one.bin"
+	if err := os.WriteFile(name, []byte("firmware"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, input string }{
+		{"repeat with Enter", "\x10\x15\r"},
+		{"canceled edit preserves previous path", "\x10\x15\x15wrong.bin\x1by\x10\x15\r"},
+		{"edit prefilled path", "\x10\x15\x15./固件 one.bin\r"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			endpoint := &fakeEndpoint{events: make(chan session.Event, 2), cancel: cancel, autoFinish: true}
+			input, inputWriter, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer input.Close()
+			defer inputWriter.Close()
+			local := &signalWriter{match: []byte("✓ Sent"), done: make(chan struct{})}
+			frontend := New(Config{Terminal: &fakeTerminal{}, Input: input, Output: &bytes.Buffer{}, Local: local})
+			result := make(chan error, 1)
+			go func() { result <- frontend.Run(ctx, endpoint) }()
+			if _, err := inputWriter.WriteString("\x10\x15" + name + "\r"); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-local.done:
+			case <-ctx.Done():
+				t.Fatal("first upload did not finish")
+			}
+			if _, err := inputWriter.WriteString(tc.input); err != nil {
+				t.Fatal(err)
+			}
+			inputWriter.Close()
+			if err := <-result; err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(local.String(), "Waiting for receiver"); got != 2 {
+				t.Fatalf("started %d uploads, want 2: %q", got, local.String())
+			}
+			if !strings.Contains(local.String(), uploadPrompt+name) {
+				t.Fatalf("missing prefilled path: %q", local.String())
+			}
+		})
 	}
 }
