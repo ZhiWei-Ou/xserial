@@ -36,6 +36,8 @@ func TestUploadPathEditingAndCompletion(t *testing.T) {
 		{"insert at cursor", "fime\x1b[D\x1b[Dr", "firme"},
 		{"delete home end", "XfirmwareX\x1b[H\x1b[3~\x1b[F\x7f", "firmware"},
 		{"clear input", "wrong\x15fi\t", "firmware "},
+		{"clear entire path from middle", "固件.bin\x02\x02\x03", ""},
+		{"edit after clearing entire path", "wrong.bin\x01\x03fi\t", "firmware "},
 		{"unsupported key stays local", "fi\x1b[A\t", "firmware "},
 		{"bracketed paste", "\x1b[200~firmware one.bin\r\n\x1b[201~", "firmware one.bin"},
 	} {

@@ -379,6 +379,7 @@ func printHelp(w io.Writer) {
 	}
 	printLocalLine(w, "  Ctrl-P Ctrl-P  send Ctrl-P")
 	printLocalLine(w, "  Esc            cancel file selection or transfer")
+	printLocalLine(w, "  Ctrl-C         clear the entire upload path during file selection")
 	printLocalLine(w, "  Tab            complete upload path (press again to list matches)")
 }
 

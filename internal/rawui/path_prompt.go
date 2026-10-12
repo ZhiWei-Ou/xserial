@@ -12,7 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-const uploadPrompt = "YMODEM upload file (Tab: complete, Esc: cancel): "
+const uploadPrompt = "YMODEM upload file: "
 
 // pathPrompt owns only local file selection; no input here reaches the device.
 type pathPrompt struct {
@@ -99,7 +99,9 @@ func (p *pathPrompt) feed(b byte, w io.Writer) (submit, cancel bool) {
 	case '\r', '\n':
 		return true, false
 	case 0x03:
-		return false, true
+		p.line = nil
+		p.cursor = 0
+		p.pending = nil // Ctrl-C clears the entire path without leaving the prompt.
 	case '\t':
 		prefix := string(p.line[:p.cursor])
 		completed, candidates, err := completePath(prefix)
