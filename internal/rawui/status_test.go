@@ -106,7 +106,7 @@ func TestStatusBarDisabledForRedirectedOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer local.Close()
-	b := NewStatusBar(output, local)
+	b := NewStatusBar(output, local, nil)
 	if err := b.start(session.ConnectionConfig{}); err != nil {
 		t.Fatal(err)
 	}
@@ -180,5 +180,60 @@ func TestYMODEMProgressRemainsSeparateFromStatusBar(t *testing.T) {
 	}
 	if strings.Contains(footer.String(), "50%") {
 		t.Fatal("progress duplicated in status bar")
+	}
+}
+
+func TestStatusBarTrafficAndWindowRate(t *testing.T) {
+	now := time.Now()
+	b := &StatusBar{state: "Connected", cfg: session.ConnectionConfig{PortName: "/dev/cu.usbserial", BaudRate: 115200, DataBits: 8, Parity: "none", StopBits: "1"}, samples: []trafficSample{{at: now.Add(-2 * time.Second)}}, traffic: func() (uint64, uint64) { return 1024, 3072 }}
+	b.sampleTraffic(now)
+	for _, width := range []int{160, 100, 80, 60, 40, 20} {
+		b.width = width
+		line := ansi.Strip(b.view(now))
+		if ansi.StringWidth(line) >= width {
+			t.Fatalf("width %d overflow: %q", width, line)
+		}
+		if width >= 80 && (!strings.Contains(line, "TX 1.0 KiB") || !strings.Contains(line, "RX 3.0 KiB")) {
+			t.Fatalf("missing totals: %q", line)
+		}
+		if width >= 100 && !strings.Contains(line, "RATE 2.0 KiB/s") {
+			t.Fatalf("incorrect window rate: %q", line)
+		}
+		t.Logf("%d: %s", width, line)
+	}
+}
+
+func TestTrafficRateTracksBurstAndReturnsToZero(t *testing.T) {
+	start := time.Now()
+	var tx, rx uint64
+	b := &StatusBar{traffic: func() (uint64, uint64) { return tx, rx }}
+	b.sampleTraffic(start)
+	tx, rx = 1024, 1024
+	b.sampleTraffic(start.Add(200 * time.Millisecond))
+	if b.rate != 10240 {
+		t.Fatalf("startup rate = %v, want 10240 B/s", b.rate)
+	}
+	for tick := 2; tick <= 10; tick++ {
+		b.sampleTraffic(start.Add(time.Duration(tick) * 200 * time.Millisecond))
+	}
+	if b.rate != 1024 {
+		t.Fatalf("two-second rate = %v, want 1024 B/s", b.rate)
+	}
+	b.sampleTraffic(start.Add(2100 * time.Millisecond))
+	if b.rate != 512 {
+		t.Fatalf("interpolated rate = %v, want 512 B/s", b.rate)
+	}
+	b.sampleTraffic(start.Add(2200 * time.Millisecond))
+	if b.rate != 0 || b.tx != 1024 || b.rx != 1024 {
+		t.Fatalf("idle: rate=%v TX=%d RX=%d", b.rate, b.tx, b.rx)
+	}
+	// After a long idle period the next burst still uses only the recent window.
+	for tick := 12; tick <= 50; tick++ {
+		b.sampleTraffic(start.Add(time.Duration(tick) * 200 * time.Millisecond))
+	}
+	tx += 2048
+	b.sampleTraffic(start.Add(10200 * time.Millisecond))
+	if b.rate != 1024 {
+		t.Fatalf("new burst rate = %v, want 1024 B/s", b.rate)
 	}
 }

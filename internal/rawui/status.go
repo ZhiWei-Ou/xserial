@@ -35,10 +35,14 @@ type StatusBar struct {
 	tipIndex      int
 	tipChanged    time.Time
 	color         bool
+	traffic       func() (tx, rx uint64)
+	samples       []trafficSample
+	tx, rx        uint64
+	rate          float64
 }
 
-func NewStatusBar(output, local *os.File) *StatusBar {
-	b := &StatusBar{dst: local, color: localColorsEnabled(), parser: ansi.NewParser()}
+func NewStatusBar(output, local *os.File, traffic func() (tx, rx uint64)) *StatusBar {
+	b := &StatusBar{dst: local, traffic: traffic, color: localColorsEnabled(), parser: ansi.NewParser()}
 	b.parser.SetDataSize(1) // Only the parser state is needed, not OSC/DCS payloads.
 	b.Output = &statusWriter{bar: b, file: output}
 	b.Local = &statusWriter{bar: b, file: local}
@@ -80,6 +84,7 @@ func (b *StatusBar) start(cfg session.ConnectionConfig) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.cfg, b.state = cfg, "Connected"
+	b.sampleTraffic(time.Now())
 	return b.resizeLocked()
 }
 
@@ -90,6 +95,7 @@ func (b *StatusBar) refresh() (bool, error) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.sampleTraffic(time.Now())
 	oldWidth, oldHeight := b.width, b.height
 	if err := b.resizeLocked(); err != nil {
 		return false, err
@@ -176,6 +182,18 @@ func (b *StatusBar) view(now time.Time) string {
 		parity = strings.ToUpper(b.cfg.Parity[:1])
 	}
 	settings := fmt.Sprintf(" · %d · %d%s%s", b.cfg.BaudRate, b.cfg.DataBits, parity, b.cfg.StopBits)
+	stats, totals := "", ""
+	if b.traffic != nil {
+		totals = fmt.Sprintf(" | TX %s | RX %s", transferSize(float64(b.tx)), transferSize(float64(b.rx)))
+		stats = totals + " | RATE " + transferSize(b.rate) + "/s"
+		if ansi.StringWidth(settings+stats)+8 > width {
+			stats = totals
+		}
+		if ansi.StringWidth(settings+stats)+4 > width {
+			stats = ""
+		}
+	}
+	settings += stats
 	port = filepath.Base(port)
 	right, compact := b.tip(now)
 	if b.state != "Connected" {
@@ -238,4 +256,35 @@ func (b *StatusBar) tip(now time.Time) (string, string) {
 		b.tipChanged = now
 	}
 	return normalTips[b.tipIndex], normalTips[b.tipIndex]
+}
+
+type trafficSample struct {
+	at    time.Time
+	total uint64
+}
+
+// sampleTraffic runs on the 200 ms refresh timer, independently of terminal
+// writes. Retain the sample before the cutoff to interpolate a two-second window.
+func (b *StatusBar) sampleTraffic(now time.Time) {
+	if b.traffic == nil {
+		return
+	}
+	b.tx, b.rx = b.traffic()
+	b.samples = append(b.samples, trafficSample{at: now, total: b.tx + b.rx})
+	cutoff := now.Add(-2 * time.Second)
+	for len(b.samples) > 1 && !b.samples[1].at.After(cutoff) {
+		b.samples = b.samples[1:]
+	}
+	first := b.samples[0]
+	start := first.at
+	delta := float64(b.tx + b.rx - first.total)
+	if start.Before(cutoff) && len(b.samples) > 1 {
+		next := b.samples[1]
+		delta -= float64(next.total-first.total) * cutoff.Sub(start).Seconds() / next.at.Sub(start).Seconds()
+		start = cutoff
+	}
+	b.rate = 0
+	if elapsed := now.Sub(start).Seconds(); elapsed > 0 {
+		b.rate = max(0, delta/elapsed)
+	}
 }

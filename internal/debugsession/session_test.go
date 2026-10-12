@@ -81,3 +81,28 @@ func TestFailedSendPreservesUnknownDelivery(t *testing.T) {
 		t.Fatalf("send = %+v, %v", sent, err)
 	}
 }
+
+func TestTrafficTotalsSurviveReconnect(t *testing.T) {
+	s := New(Connection{Port: "test"})
+	s.ConnectionChanged(1, true)
+	s.Written(1, 1024)
+	s.Received(1, []byte("ACK"))
+	s.ConnectionChanged(1, false)
+	if tx, rx := s.Traffic(); tx != 1024 || rx != 3 {
+		t.Fatalf("detached traffic: TX=%d RX=%d", tx, rx)
+	}
+	s.ConnectionChanged(2, true)
+	s.Written(2, 512)
+	s.Received(2, []byte("OK"))
+	s.Received(1, []byte("stale"))
+	s.Written(1, 99)
+	if tx, rx := s.Traffic(); tx != 1536 || rx != 5 {
+		t.Fatalf("total traffic: TX=%d RX=%d", tx, rx)
+	}
+	if status := s.Status(); status.TXBytes != 512 || status.RXBytes != 2 {
+		t.Fatalf("MCP counters changed scope: %+v", status)
+	}
+	if tx, rx := New(Connection{}).Traffic(); tx != 0 || rx != 0 {
+		t.Fatal("traffic leaked between runs")
+	}
+}

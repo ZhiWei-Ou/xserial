@@ -150,11 +150,12 @@ func runConn(ctx context.Context, opts connOptions) (runErr error) {
 			return err
 		}
 	}
+	debug := debugsession.New(debugsession.Connection{})
 	var statusBar *rawui.StatusBar
 	var localOutput io.Writer = os.Stderr
 	var deviceOutput io.Writer = os.Stdout
 	if !opts.tui && !opts.workbench {
-		statusBar = rawui.NewStatusBar(os.Stdout, os.Stderr)
+		statusBar = rawui.NewStatusBar(os.Stdout, os.Stderr, debug.Traffic)
 		localOutput, deviceOutput = statusBar.Local, statusBar.Output
 	}
 	logger := logging.New(localOutput)
@@ -245,7 +246,6 @@ func runConn(ctx context.Context, opts connOptions) (runErr error) {
 		})
 	}
 
-	debug := debugsession.New(debugsession.Connection{})
 	publication, publishErr := publishTerminal(ctx, opts.stateDir, debug)
 	if publishErr != nil {
 		logger.Warn("mcp.publish_failed", "error", publishErr)

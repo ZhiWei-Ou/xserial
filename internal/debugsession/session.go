@@ -22,6 +22,8 @@ type Session struct {
 	generation uint64
 	history    *history
 	txBytes    uint64
+	totalTX    uint64
+	totalRX    uint64
 	sender     Sender
 }
 
@@ -52,6 +54,7 @@ func (s *Session) Received(generation uint64, data []byte) {
 	defer s.mu.Unlock()
 	if s.history != nil && s.generation == generation {
 		s.history.append(data)
+		s.totalRX += uint64(len(data))
 	}
 }
 
@@ -60,7 +63,16 @@ func (s *Session) Written(generation uint64, n int) {
 	defer s.mu.Unlock()
 	if s.history != nil && s.generation == generation {
 		s.txBytes += uint64(n)
+		s.totalTX += uint64(n)
 	}
+}
+
+// Traffic returns bytes observed across all connections in this terminal run.
+// Unlike MCP history counters, these totals survive disconnects and reconnects.
+func (s *Session) Traffic() (tx, rx uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.totalTX, s.totalRX
 }
 
 func (s *Session) Status() Status {
