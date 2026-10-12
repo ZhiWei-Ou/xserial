@@ -150,7 +150,14 @@ func runConn(ctx context.Context, opts connOptions) (runErr error) {
 			return err
 		}
 	}
-	logger := logging.New(os.Stderr)
+	var statusBar *rawui.StatusBar
+	var localOutput io.Writer = os.Stderr
+	var deviceOutput io.Writer = os.Stdout
+	if !opts.tui && !opts.workbench {
+		statusBar = rawui.NewStatusBar(os.Stdout, os.Stderr)
+		localOutput, deviceOutput = statusBar.Local, statusBar.Output
+	}
+	logger := logging.New(localOutput)
 	connectionConfig := session.ConnectionConfig{
 		PortName: opts.port,
 		BaudRate: opts.baud,
@@ -231,7 +238,8 @@ func runConn(ctx context.Context, opts connOptions) (runErr error) {
 			Terminal:   rawui.NewOSTerminal(os.Stdin),
 			Hexdump:    opts.hexdump,
 			Input:      os.Stdin,
-			Output:     os.Stdout,
+			Output:     deviceOutput,
+			StatusBar:  statusBar,
 			Local:      logger,
 			TimeFormat: opts.timeFormat,
 		})
