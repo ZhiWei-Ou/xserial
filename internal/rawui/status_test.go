@@ -32,7 +32,7 @@ func TestStatusBarLifecycleAndResize(t *testing.T) {
 	if _, err := b.refresh(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Reconnecting") {
+	if !strings.Contains(out.String(), "* [retry]") {
 		t.Fatal("missing connection state")
 	}
 	width, height = 60, 15
@@ -244,5 +244,20 @@ func TestTrafficRateTracksBurstAndReturnsToZero(t *testing.T) {
 	b.sampleTraffic(start.Add(10200 * time.Millisecond))
 	if b.rate != 1024 {
 		t.Fatalf("new burst rate = %v, want 1024 B/s", b.rate)
+	}
+}
+
+func TestStatusBarConnectionMarkerKeepsTips(t *testing.T) {
+	for _, state := range []struct{ name, text string }{{"Connected", "up"}, {"Reconnecting", "retry"}, {"Disconnected", "down"}} {
+		b := &StatusBar{width: 120, state: state.name, cfg: session.ConnectionConfig{PortName: "/dev/cu.usbserial", BaudRate: 115200, DataBits: 8, Parity: "none", StopBits: "1"}}
+		line := b.view(time.Now())
+		if !strings.HasPrefix(line, "* ["+state.text+"] cu.usbserial/") || !strings.Contains(line, "Tip: ") {
+			t.Fatalf("%s: %q", state.name, line)
+		}
+		b.color = true
+		line = ansi.Strip(b.view(time.Now()))
+		if !strings.HasPrefix(line, "* cu.usbserial/") || !strings.Contains(line, "Tip: ") {
+			t.Fatalf("colored %s: %q", state.name, line)
+		}
 	}
 }

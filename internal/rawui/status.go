@@ -185,19 +185,28 @@ func (b *StatusBar) view(now time.Time) string {
 	}
 	settings := fmt.Sprintf("/%d/%d%s%s", b.cfg.BaudRate, b.cfg.DataBits, parity, b.cfg.StopBits)
 	port = filepath.Base(port)
+	statusColor, statusText := localSuccessColor, "up"
+	switch b.state {
+	case "Reconnecting":
+		statusColor, statusText = localWarningColor, "retry"
+	case "Disconnected":
+		statusColor, statusText = localErrorColor, "down"
+	}
+	indicator := "* "
+	if !b.color {
+		indicator += "[" + statusText + "] "
+	}
+	indicatorWidth := ansi.StringWidth(indicator)
 	right, compact := b.tip(now)
 	right, compact = "Tip: "+right, "Tip: "+compact
-	if b.state != "Connected" {
-		right, compact = b.state, b.state
-	}
 	available := width
 	if right != "" {
 		available -= ansi.StringWidth(right) + 3
-		if available-ansi.StringWidth(settings) < 8 {
+		if available-indicatorWidth-ansi.StringWidth(settings) < 8 {
 			right = compact
 			available = width - ansi.StringWidth(right) - 3
 		}
-		if available-ansi.StringWidth(settings) < 4 {
+		if available-indicatorWidth-ansi.StringWidth(settings) < 4 {
 			right = ""
 			available = width
 		}
@@ -205,12 +214,12 @@ func (b *StatusBar) view(now time.Time) string {
 	if b.traffic != nil {
 		runtime := fmt.Sprintf(" · TX %s | RX %s | RATE %s/s",
 			transferSize(float64(b.tx)), transferSize(float64(b.rx)), transferSize(b.rate))
-		if ansi.StringWidth(port+settings+runtime) <= available {
+		if indicatorWidth+ansi.StringWidth(port+settings+runtime) <= available {
 			settings += runtime
 		}
 	}
-	port = ansi.Truncate(port, max(1, available-ansi.StringWidth(settings)), "…")
-	left := ansi.Truncate(port+settings, available, "…")
+	port = ansi.Truncate(port, max(1, available-indicatorWidth-ansi.StringWidth(settings)), "…")
+	left := ansi.Truncate(indicator+port+settings, available, "…")
 	gap := ""
 	if right != "" {
 		gap = strings.Repeat(" ", max(3, width-ansi.StringWidth(left)-ansi.StringWidth(right)))
@@ -218,13 +227,10 @@ func (b *StatusBar) view(now time.Time) string {
 	if !b.color {
 		return left + gap + right
 	}
-	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B"))
-	label := lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8"))
-	left = ansi.Truncate(label.Render(port)+muted.Render(settings), available, "…")
+	label := lipgloss.NewStyle().Foreground(lipgloss.Color("#93C5FD"))
+	indicator = lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor)).Render("*") + " "
+	left = ansi.Truncate(indicator+label.Render(port+settings), available, "…")
 	rightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
-	if b.state != "Connected" {
-		rightStyle = rightStyle.Foreground(lipgloss.Color(localWarningColor))
-	}
 	return left + gap + rightStyle.Render(right)
 }
 
