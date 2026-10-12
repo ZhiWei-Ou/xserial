@@ -24,6 +24,9 @@ func TestStatusBarLifecycleAndResize(t *testing.T) {
 	if got := out.String(); !strings.Contains(got, "\x1b[1;23r") || !strings.Contains(got, "115200/8N1") || strings.Contains(got, "1049") {
 		t.Fatalf("initial screen: %q", got)
 	}
+	if got := out.String(); !strings.HasPrefix(got, "\x1b7\x1b[r\x1b8\x1bD\x1bM\x1b7\x1b[1;23r\x1b8") {
+		t.Fatalf("startup must preserve the content cursor: %q", got)
+	}
 	b.update("Reconnecting", inputNormal)
 	out.Reset()
 	if _, err := b.refresh(); err != nil {
@@ -38,11 +41,14 @@ func TestStatusBarLifecycleAndResize(t *testing.T) {
 	if err != nil || !resized || !strings.Contains(out.String(), "\x1b[1;14r") {
 		t.Fatalf("resize=%v err=%v screen=%q", resized, err, out.String())
 	}
+	if strings.Contains(out.String(), "\x1b[14;1H") || !strings.Contains(out.String(), "\x1b[1;14r\x1b8") {
+		t.Fatalf("resize must restore the content cursor: %q", out.String())
+	}
 	out.Reset()
 	if err := b.close(); err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); !strings.Contains(got, "\x1b[r") || !strings.Contains(got, "\x1b[15;1H\x1b[2K") {
+	if got := out.String(); !strings.Contains(got, "\x1b[r") || !strings.Contains(got, "\x1b[15;1H\x1b[2K") || !strings.HasSuffix(got, "\x1b8") {
 		t.Fatalf("restore: %q", got)
 	}
 

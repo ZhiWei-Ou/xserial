@@ -115,17 +115,19 @@ func (b *StatusBar) resizeLocked() error {
 		return nil
 	}
 	var control strings.Builder
+	control.WriteString("\x1b7")
 	if b.active {
-		fmt.Fprintf(&control, "\x1b[%d;1H\x1b[0m\x1b[2K\x1b[r", min(b.height, height))
+		fmt.Fprintf(&control, "\x1b[%d;1H\x1b[0m\x1b[2K", min(b.height, height))
 	}
 	b.width, b.height = width, height
 	b.active = width >= 12 && height >= 3
+	// Changing margins homes the cursor, so restore it before reserving the row.
+	control.WriteString("\x1b[r\x1b8")
 	if b.active {
-		// Reserve a fresh bottom row without switching to the alternate screen.
-		if control.Len() == 0 {
-			fmt.Fprintf(&control, "\x1b[%d;1H\r\n", height)
-		}
-		fmt.Fprintf(&control, "\x1b[1;%dr\x1b[%d;1H", height-1, height-1)
+		// IND followed by RI preserves an interior cursor. At the last row it
+		// scrolls once and leaves the cursor above the new status row.
+		control.WriteString("\x1bD\x1bM\x1b7")
+		fmt.Fprintf(&control, "\x1b[1;%dr\x1b8", height-1)
 	}
 	if _, err := io.WriteString(b.dst, control.String()); err != nil {
 		return err
@@ -144,7 +146,7 @@ func (b *StatusBar) close() error {
 	}
 	b.active = false
 	// Cancel a possible unfinished device escape before restoring the terminal.
-	_, err := fmt.Fprintf(b.dst, "\x18\x1b[0m\x1b[r\x1b[%d;1H\x1b[2K", b.height)
+	_, err := fmt.Fprintf(b.dst, "\x18\x1b7\x1b[0m\x1b[r\x1b[%d;1H\x1b[2K\x1b8", b.height)
 	return err
 }
 
