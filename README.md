@@ -103,12 +103,22 @@ In the default terminal, press `Ctrl-P Ctrl-U` to upload a file or `Ctrl-P Ctrl-
 | --- | --- |
 | Full-screen console (Beta) | `xserial /dev/ttyUSB0 --TUI` |
 | Binary workbench | `xserial /dev/ttyUSB0 --workbench` |
+| Truncate long RawUI lines | `xserial /dev/ttyUSB0 -S` |
 | Hexdump with timestamps | `xserial /dev/ttyUSB0 --hexdump --time` |
 | Receive log | `xserial /dev/ttyUSB0 --log device.log` |
 | Record / replay | `xserial /dev/ttyUSB0 --record session.xsr` / `xserial replay session.xsr` |
 | Export | `xserial export session.xsr -o excerpt.txt` |
 
 Connection syntax: `xserial <port> [baud,data-bits,parity,stop-bits]`; defaults: `115200,8,N,1`. Trailing fields can be omitted. Use `--help` for all options; `-h` selects Hexdump. Recording and export create new files.
+
+`-S` / `--chop-long-lines` truncates received RawUI lines at the terminal width
+instead of wrapping, with no horizontal scrolling. Each output chunk uses the
+current width. Once a line is truncated, its remaining text stays hidden until
+its next line break or carriage return; resizing does not restore discarded
+text or redraw previous lines. It also works with `--time` and `--hexdump`,
+including their prefixes in the width. Logs, recordings, MCP history, and
+redirected stdout remain complete. This option cannot be combined with `--TUI`
+or `--workbench`.
 
 <details>
 <summary>📸 Screenshots &amp; terminal demo</summary>

@@ -68,6 +68,7 @@ func newRootCommand(deps rootDependencies) *cobra.Command {
 			}
 			opts.stateDir = flags.stateDir
 			opts.hexdump = flags.hexdump
+			opts.chopLongLines = flags.chopLongLines
 			opts.workbench = flags.workbench
 			opts.favoritesPath = flags.favoritesPath
 			opts.recordPath = flags.recordPath

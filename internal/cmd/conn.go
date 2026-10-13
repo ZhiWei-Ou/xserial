@@ -34,6 +34,7 @@ type connOptions struct {
 	timeFormat    string
 	tui           bool
 	hexdump       bool
+	chopLongLines bool
 	workbench     bool
 	favoritesPath string
 	framing       hexdata.FrameConfig
@@ -46,6 +47,7 @@ type connFlags struct {
 	showTime      bool
 	useTUI        bool
 	hexdump       bool
+	chopLongLines bool
 	workbench     bool
 	favoritesPath string
 	frameRule     string
@@ -61,6 +63,7 @@ func bindConnFlags(cmd *cobra.Command, flags *connFlags) {
 	cmd.Flags().StringVar(&flags.stateDir, "state-dir", "", "private state directory for MCP session discovery")
 	cmd.Flags().Bool("help", false, "help for xserial")
 	cmd.Flags().BoolVarP(&flags.hexdump, "hexdump", "h", false, "display received bytes as a hex and ASCII dump")
+	cmd.Flags().BoolVarP(&flags.chopLongLines, "chop-long-lines", "S", false, "truncate RawUI received lines to terminal width (no horizontal scrolling)")
 	cmd.Flags().StringVar(&flags.logPath, "log", "", "append received bytes to file")
 	cmd.Flags().BoolVarP(&flags.showTime, "time", "t", false, "prepend timestamps (HH:MM:SS.mmm) to received lines")
 	cmd.Flags().BoolVar(&flags.useTUI, "TUI", false, "open the full-screen interface (Beta, unstable)")
@@ -68,6 +71,8 @@ func bindConnFlags(cmd *cobra.Command, flags *connFlags) {
 	cmd.Flags().StringVar(&flags.favoritesPath, "commands", "", "command favorites JSON file (default: user config directory)")
 	cmd.Flags().StringVar(&flags.frameRule, "frame", "chunk", "RX framing: chunk, fixed:N, delimiter:HEX, length:OFFSET:WIDTH:OVERHEAD:le|be, modbus-read")
 	cmd.Flags().StringVar(&flags.recordPath, "record", "", "record original RX/TX and connection events to a new .xsr file")
+	cmd.MarkFlagsMutuallyExclusive("chop-long-lines", "TUI")
+	cmd.MarkFlagsMutuallyExclusive("chop-long-lines", "workbench")
 	cmd.MarkFlagsMutuallyExclusive("hexdump", "TUI")
 	cmd.MarkFlagsMutuallyExclusive("workbench", "TUI")
 	cmd.MarkFlagsMutuallyExclusive("workbench", "hexdump")
@@ -235,14 +240,15 @@ func runConn(ctx context.Context, opts connOptions) (runErr error) {
 		})
 	} else {
 		frontend = rawui.New(rawui.Config{
-			Connection: connectionConfig,
-			Terminal:   rawui.NewOSTerminal(os.Stdin),
-			Hexdump:    opts.hexdump,
-			Input:      os.Stdin,
-			Output:     deviceOutput,
-			StatusBar:  statusBar,
-			Local:      logger,
-			TimeFormat: opts.timeFormat,
+			Connection:    connectionConfig,
+			Terminal:      rawui.NewOSTerminal(os.Stdin),
+			Hexdump:       opts.hexdump,
+			ChopLongLines: opts.chopLongLines,
+			Input:         os.Stdin,
+			Output:        deviceOutput,
+			StatusBar:     statusBar,
+			Local:         logger,
+			TimeFormat:    opts.timeFormat,
 		})
 	}
 

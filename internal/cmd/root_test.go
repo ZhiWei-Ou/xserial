@@ -275,3 +275,24 @@ func TestDetailedVersionPreservesBuildMetadata(t *testing.T) {
 type versionErrorWriter struct{}
 
 func (versionErrorWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestRootChopLongLinesFlags(t *testing.T) {
+	for _, flag := range []string{"-S", "--chop-long-lines"} {
+		var got connOptions
+		cmd := newRootCommand(rootDependencies{conn: func(_ context.Context, opts connOptions) error { got = opts; return nil }})
+		cmd.SetArgs([]string{"test-port", flag, "--time", "--hexdump"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if !got.chopLongLines || !got.hexdump || got.timeFormat == "" {
+			t.Fatalf("options = %+v", got)
+		}
+	}
+	for _, mode := range []string{"--TUI", "--workbench"} {
+		cmd := newRootCommand(rootDependencies{conn: func(context.Context, connOptions) error { t.Fatal("must reject before opening port"); return nil }})
+		cmd.SetArgs([]string{"test-port", "-S", mode})
+		if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "chop-long-lines") {
+			t.Fatalf("mode %s: %v", mode, err)
+		}
+	}
+}

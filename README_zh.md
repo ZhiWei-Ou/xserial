@@ -101,12 +101,19 @@ agent 会启动 stdio 进程，并自动启动或复用本机会话 daemon。如
 | --- | --- |
 | 全屏控制台（Beta） | `xserial /dev/ttyUSB0 --TUI` |
 | 二进制工作台 | `xserial /dev/ttyUSB0 --workbench` |
+| 截断 RawUI 长行 | `xserial /dev/ttyUSB0 -S` |
 | 带时间戳的 Hexdump | `xserial /dev/ttyUSB0 --hexdump --time` |
 | 接收日志 | `xserial /dev/ttyUSB0 --log device.log` |
 | 录制 / 回放 | `xserial /dev/ttyUSB0 --record session.xsr` / `xserial replay session.xsr` |
 | 导出 | `xserial export session.xsr -o excerpt.txt` |
 
 连接语法：`xserial <port> [baud,data-bits,parity,stop-bits]`，默认 `115200,8,N,1`，可从右侧省略字段。使用 `--help` 查看全部选项，`-h` 表示 Hexdump。录制和导出创建新文件。
+
+`-S` / `--chop-long-lines` 将 RawUI 接收内容按终端宽度截断，避免自动折行，不提供横向滚动。
+每批输出使用当前窗口宽度；一行开始截断后，其余内容隐藏到换行或回车为止。
+调整窗口不会恢复已截掉的内容或重绘历史行。可配合 `--time`、`--hexdump` 使用，
+时间戳和 Hexdump 前缀也计入行宽。日志、录制、MCP 历史和重定向 stdout 仍保留完整内容。
+该选项不能与 `--TUI` 或 `--workbench` 同时使用。
 
 <details>
 <summary>📸 截图与终端演示</summary>

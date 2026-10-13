@@ -56,15 +56,16 @@ func (t *OSTerminal) Restore() error {
 }
 
 type Config struct {
-	Connection session.ConnectionConfig
-	Terminal   Terminal
-	Input      io.Reader
-	Output     io.Writer
-	Local      io.Writer
-	PrefixKey  byte
-	TimeFormat string
-	Hexdump    bool
-	StatusBar  *StatusBar
+	Connection    session.ConnectionConfig
+	Terminal      Terminal
+	Input         io.Reader
+	Output        io.Writer
+	Local         io.Writer
+	PrefixKey     byte
+	TimeFormat    string
+	Hexdump       bool
+	ChopLongLines bool
+	StatusBar     *StatusBar
 }
 
 type Frontend struct {
@@ -214,6 +215,10 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 	}
 	requestRead()
 	deviceOutput := f.cfg.Output
+	if f.cfg.ChopLongLines {
+		deviceOutput = chopTerminalOutput(deviceOutput)
+	}
+	chopped, _ := deviceOutput.(*chopWriter)
 	if f.cfg.TimeFormat != "" {
 		deviceOutput = linetime.NewWriter(deviceOutput, f.cfg.TimeFormat)
 	}
@@ -252,6 +257,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 			case session.Reconnecting:
 				bar.update("Reconnecting", state)
 			case session.Reconnected:
+				chopped.resetLine()
 				bar.update("Connected", state)
 			case session.Received:
 				if ymodemMode {
@@ -270,6 +276,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 				state = inputNormal
 				bar.update("", state)
 				progress.finish(f.cfg.Local, event)
+				chopped.resetLine()
 				requestRead()
 			}
 		case result := <-input:
@@ -298,6 +305,8 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 						return err
 					}
 				} else if command, ok := findLocalCommand(result.b); ok {
+					// Local commands finish on a fresh display line.
+					chopped.resetLine()
 					switch command.action {
 					case actionInfo:
 						cfg := f.cfg.Connection
@@ -357,6 +366,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 					escapeTimer.Reset(100 * time.Millisecond)
 				}
 				if canceled {
+					chopped.resetLine()
 					cancelSelection()
 				}
 				if submit {
