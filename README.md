@@ -39,7 +39,7 @@ https://github.com/user-attachments/assets/0abb2e41-440a-4888-a991-1f1b4079d223
 
 ## Features
 
-- 🤖 **AI via MCP** — Read device output and send exact bytes over HTTP or stdio.
+- 🤖 **AI via MCP** — Read device output and send exact bytes over stdio.
 - 🖥️ **Serial terminal** — RawUI, full-screen TUI, Hexdump, reconnection, logs, and YMODEM.
 - 🔬 **Binary debugging** — Hex editing, field inspection, checksums, framing, and command favorites.
 - 📝 **Offline analysis** — Record, replay, search, mark, and export traffic.
@@ -61,13 +61,29 @@ You can also build a source checkout with native Go: `go build ./cmd/xserial`.
 
 ### Connect a coding agent via MCP
 
-Keep your serial terminal running, then start MCP in another terminal:
+Keep your serial terminal running, then configure your agent to launch `xserial mcp`
+as a stdio subprocess. For Codex CLI:
 
 ```bash
-xserial mcp
+codex mcp add xserial -- xserial mcp
 ```
 
-Add `http://127.0.0.1:8765/mcp` to your agent's MCP configuration. For stdio clients, use `xserial mcp --transport stdio`.
+Claude Code CLI:
+
+```bash
+claude mcp add --transport stdio --scope user xserial -- xserial mcp
+```
+
+`--scope user` makes the Claude configuration available across projects.
+Check the registered server with `codex mcp list` or `claude mcp get xserial`.
+
+The agent launches the stdio process, which automatically starts or reuses the
+local session daemon. Use an absolute executable path if `xserial` is not on the
+agent's PATH. No separate MCP terminal or HTTP endpoint is needed.
+
+Upgrading an existing setup? Stop the old daemon with the old executable before
+replacing it, restart serial terminals, and update the client configuration.
+See [migration steps](docs/mcp.md#upgrade-an-existing-mcp-configuration).
 
 | Tool | Purpose |
 | --- | --- |

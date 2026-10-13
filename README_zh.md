@@ -39,7 +39,7 @@ https://github.com/user-attachments/assets/0abb2e41-440a-4888-a991-1f1b4079d223
 
 ## 核心功能
 
-- 🤖 **AI 接入** — 通过 HTTP 或 stdio MCP 读取设备输出、发送精确字节。
+- 🤖 **AI 接入** — 通过 stdio MCP 读取设备输出、发送精确字节。
 - 🖥️ **串口终端** — RawUI、全屏 TUI、Hexdump、自动重连、日志与 YMODEM。
 - 🔬 **二进制调试** — Hex 编辑、字段检查、校验和、分帧与命令收藏。
 - 📝 **离线分析** — 录制、回放、搜索、标记和导出。
@@ -61,13 +61,27 @@ macOS 可使用 `/dev/cu.usbserial-0001`，Windows 使用 `COM3`。按 `Ctrl-P h
 
 ### 通过 MCP 连接 coding agent
 
-保持串口终端运行，在另一个终端启动 MCP：
+保持串口终端运行，将 agent 配置为通过 stdio 子进程启动 `xserial mcp`。
+Codex CLI 配置方式：
 
 ```bash
-xserial mcp
+codex mcp add xserial -- xserial mcp
 ```
 
-将 `http://127.0.0.1:8765/mcp` 加入 agent 的 MCP 配置；stdio 客户端使用 `xserial mcp --transport stdio`。
+Claude Code CLI 配置方式：
+
+```bash
+claude mcp add --transport stdio --scope user xserial -- xserial mcp
+```
+
+`--scope user` 让 Claude 配置在所有项目中可用。
+使用 `codex mcp list` 或 `claude mcp get xserial` 检查已添加的服务。
+
+agent 会启动 stdio 进程，并自动启动或复用本机会话 daemon。如果 agent 的 PATH
+中没有 `xserial`，请使用可执行文件的绝对路径。无需额外启动 MCP 终端或配置 HTTP 地址。
+
+升级已有配置时，先用旧程序停止 daemon，再替换程序、重启串口终端并更新客户端配置。
+详见[迁移步骤](docs/mcp.md#upgrade-an-existing-mcp-configuration)。
 
 | 工具 | 用途 |
 | --- | --- |

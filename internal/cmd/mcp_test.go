@@ -63,7 +63,7 @@ func connectBridge(ctx context.Context, dir string) (*mcp.ClientSession, error) 
 	if err != nil {
 		return nil, err
 	}
-	command := exec.Command(executable, "mcp", "--transport", "stdio", "--url", "http://127.0.0.1:0/mcp", "--state-dir", dir)
+	command := exec.Command(executable, "mcp", "--state-dir", dir)
 	command.Env = append(os.Environ(), "XSERIAL_MCP_TEST_PROCESS=1")
 	stderr, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 	if err != nil {
@@ -285,8 +285,8 @@ func TestMCPDaemonCrashRetainsTerminalIdentityAndCursor(t *testing.T) {
 	}
 }
 
-func TestMCPCommandRejectsInvalidTransportAndNonlocalURL(t *testing.T) {
-	for _, args := range [][]string{{"mcp", "--transport", "bad"}, {"mcp", "--url", "http://example.com/mcp"}} {
+func TestMCPCommandRejectsRemovedTransportAndURLFlags(t *testing.T) {
+	for _, args := range [][]string{{"mcp", "--transport", "http"}, {"mcp", "--transport", "stdio"}, {"mcp", "--url", "http://example.com/mcp"}} {
 		cmd := NewRootCommand()
 		cmd.SetOut(io.Discard)
 		cmd.SetErr(io.Discard)
@@ -380,7 +380,7 @@ func TestReusedStdioBridgePrintsAuditOnlyToStderr(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer capture.Close()
-	command := exec.Command(executable, "mcp", "--transport", "stdio", "--state-dir", dir)
+	command := exec.Command(executable, "mcp", "--state-dir", dir)
 	command.Env = append(os.Environ(), "XSERIAL_MCP_TEST_PROCESS=1")
 	command.Stderr = capture
 	session, err := mcp.NewClient(&mcp.Implementation{Name: "audit-observer", Version: "test"}, nil).Connect(ctx, &mcp.CommandTransport{Command: command, TerminateDuration: time.Second}, nil)

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/ZhiWei-Ou/xserial/internal/debugsession"
 	"github.com/ZhiWei-Ou/xserial/internal/demo"
+	"github.com/ZhiWei-Ou/xserial/internal/mcpserver"
 	"github.com/ZhiWei-Ou/xserial/internal/middleware"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -145,7 +145,7 @@ func attached(t *testing.T, c *Client, count int) []debugsession.Status {
 	}
 }
 func testOptions(t *testing.T) Options {
-	return Options{StateDir: filepath.Join(t.TempDir(), "state"), URL: "http://127.0.0.1:0/custom/mcp", Version: "test", Stderr: io.Discard}
+	return Options{StateDir: filepath.Join(t.TempDir(), "state"), Version: "test", Stderr: io.Discard}
 }
 
 func TestDiscoveryBothStartupOrdersMultipleTerminalsAndRestart(t *testing.T) {
@@ -169,7 +169,7 @@ func TestDiscoveryBothStartupOrdersMultipleTerminalsAndRestart(t *testing.T) {
 			if status[0].Connection.Port == status[1].Connection.Port {
 				t.Fatal("multiple ports not exposed")
 			}
-			if err := Run(context.Background(), opts); !errors.Is(err, ErrRunning) || !strings.Contains(err.Error(), client.Meta.URL) {
+			if err := Run(context.Background(), opts); !errors.Is(err, ErrRunning) {
 				t.Fatalf("duplicate = %v", err)
 			}
 			id := terminal.session.Status().SessionID
@@ -216,7 +216,7 @@ func fmtBool(value bool) string {
 	return "daemon_first"
 }
 
-func TestHTTPClientsCustomURLAuditAndStopPreserveTerminal(t *testing.T) {
+func TestMCPClientsAuditAndStopPreserveTerminal(t *testing.T) {
 	opts := testOptions(t)
 	logs := &safeBuffer{}
 	opts.Stderr = logs
@@ -226,7 +226,13 @@ func TestHTTPClientsCustomURLAuditAndStopPreserveTerminal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	connect := func() *mcp.ClientSession {
-		session, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "test"}, nil).Connect(ctx, &mcp.StreamableClientTransport{Endpoint: client.Meta.URL}, nil)
+		serverTransport, clientTransport := mcp.NewInMemoryTransports()
+		server, err := mcpserver.New(opts.Version, client).Connect(ctx, serverTransport, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = server.Close() })
+		session, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "test"}, nil).Connect(ctx, clientTransport, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -261,7 +267,7 @@ func TestHTTPClientsCustomURLAuditAndStopPreserveTerminal(t *testing.T) {
 	if !strings.Contains(text, "invalid tool arguments or unknown tool") {
 		t.Fatalf("schema rejection was not audited: %s", text)
 	}
-	for _, want := range []string{"[ INFO | mcp.started ]", client.Meta.URL, "mcp.client_connected", "mcp.attach", "mcp.send", "mcp.read", "truncated=true", "client_id=", "request_id=", "session_id=", "duration_ms=", "result=\"completed\""} {
+	for _, want := range []string{"[ INFO | mcp.started ]", "mcp.client_connected", "mcp.attach", "mcp.send", "mcp.read", "truncated=true", "client_id=", "request_id=", "session_id=", "duration_ms=", "result=\"completed\""} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %s in %s", want, text)
 		}
@@ -270,14 +276,6 @@ func TestHTTPClientsCustomURLAuditAndStopPreserveTerminal(t *testing.T) {
 		if strings.Contains(text, secret) {
 			t.Fatal("audit leaked", secret)
 		}
-	}
-	response, err := http.Get(strings.TrimSuffix(client.Meta.URL, "/custom/mcp") + "/wrong")
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != 404 {
-		t.Fatal(response.StatusCode)
 	}
 	if err := Stop(ctx, opts); err != nil {
 		t.Fatal(err)
@@ -368,19 +366,6 @@ func TestAuthenticationProtocolCompatibilityAndStaleMetadata(t *testing.T) {
 	}
 	if _, err := Ensure(context.Background(), opts); !errors.Is(err, ErrIncompatible) {
 		t.Fatalf("autostart replaced old daemon: %v", err)
-	}
-}
-
-func TestURLRejectsNonlocalAndMalformedEndpoints(t *testing.T) {
-	for _, value := range []string{"https://127.0.0.1:8765/mcp", "http://0.0.0.0:8765/mcp", "http://example.com/mcp", "http://u:p@localhost/mcp", "http://localhost:70000/mcp", "http://localhost/mcp?q=1"} {
-		if _, err := ParseURL(value); err == nil {
-			t.Fatal("accepted", value)
-		}
-	}
-	for _, value := range []string{"", "http://localhost:8766/agent", "http://[::1]:8765/mcp"} {
-		if _, err := ParseURL(value); err != nil {
-			t.Fatal(err)
-		}
 	}
 }
 

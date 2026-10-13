@@ -1,41 +1,78 @@
-# Terminal sessions over MCP
+# Terminal sessions over stdio MCP
 
 xserial lets coding agents observe and send bytes through serial sessions that
 are already running in RawUI, TUI or workbench. The terminal process opens,
 owns and closes its port. A single local MCP daemon discovers these terminals
-and forwards requests; it never opens a serial port itself.
+and forwards requests over authenticated local IPC; it never opens a serial
+port itself. Coding clients connect exclusively through stdio. There is no
+HTTP MCP endpoint.
 
 ## Start a terminal and MCP
 
-Download xserial from [Releases](https://github.com/ZhiWei-Ou/xserial/releases/latest), then run these in separate terminals, in either order:
+Use an executable built from the current source, or a release that supports
+this stdio-only interface. Open your serial terminal:
 
 ```sh
 xserial /dev/ttyUSB0 115200
-xserial mcp
 ```
 
-`xserial mcp` runs in the foreground and serves Streamable HTTP at
-`http://127.0.0.1:8765/mcp`. Connect your coding client's HTTP MCP configuration
-to that URL. A client that accepts an `mcpServers` URL mapping can use:
+Configure your coding client to launch `xserial mcp` as a stdio subprocess.
+For Codex CLI:
+
+```sh
+codex mcp add xserial -- /absolute/path/to/xserial mcp
+```
+
+For Claude Code CLI:
+
+```sh
+claude mcp add --transport stdio --scope user xserial -- /absolute/path/to/xserial mcp
+```
+
+Claude's `--scope user` makes this configuration available across projects.
+Use `--scope local` instead to keep it private to the current project.
+`--transport stdio` belongs to Claude's CLI and precedes `--`; the xserial
+subprocess receives only `mcp`.
+
+Check the configured server with your client's command:
+
+```sh
+codex mcp list
+claude mcp get xserial
+```
+
+Start a new client session and use `/mcp` to inspect the connection, then ask
+it to call `serial_status` to discover your running serial terminal.
+See the official [Codex MCP documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
+and [Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
+
+Replace `/absolute/path/to/xserial` with your executable path. The client
+launches this process; you do not need to run `xserial mcp` in another terminal.
+
+For clients that accept an `mcpServers` mapping:
 
 ```json
 {
   "mcpServers": {
-    "xserial": { "url": "http://127.0.0.1:8765/mcp" }
+    "xserial": {
+      "command": "/absolute/path/to/xserial",
+      "args": ["mcp"]
+    }
   }
 }
 ```
 
-Use the configuration format required by your client. Change the local port
-and path with `xserial mcp --url http://127.0.0.1:8766/agent/mcp`.
-Only HTTP on `localhost`, `127.0.0.1` or `[::1]` is accepted. The startup audit
-reports the actual URL; port `0` selects an available ephemeral port. A duplicate
-start reports the running daemon's URL and does not create a second daemon.
+MCP messages exclusively use stdin/stdout. The stdio process starts or reuses
+one local session daemon, which discovers terminals and routes requests over
+authenticated loopback IPC. The daemon outlives its stdio clients and inherits
+the starter's stderr. A client reusing a daemon subscribes to subsequent audit
+records and prints them on its own stderr.
 
-Multiple terminals, ports and MCP clients can run together. Terminal sessions
-are discovered every 250 ms, and `serial_status` refreshes discovery as well.
-Stopping or crashing the daemon leaves terminal I/O running. Restart it to
-reattach the same live sessions and their retained history.
+Multiple terminals, ports and MCP clients can run together, in either startup
+order. Terminal sessions are discovered every 250 ms, and `serial_status`
+refreshes discovery as well. Stopping or crashing the daemon leaves terminal
+I/O running. Restart the MCP client to reattach the same live sessions and their
+retained history.
 
 Inspect or stop MCP access:
 
@@ -44,31 +81,27 @@ xserial mcp status
 xserial mcp stop
 ```
 
-`status` prints the daemon PID, version, HTTP URL and attached session list as
-JSON. It does not start a daemon. `stop` stops MCP listeners and requests;
-the user's serial terminals remain connected. `xserial mcp daemon` is also
-available as a foreground daemon entry point.
+`status` prints the daemon PID, version and attached session list as JSON.
+It does not start a daemon. `stop` stops the daemon and its requests; the user's
+serial terminals remain connected. `xserial mcp daemon` can also start the
+local session daemon in the foreground.
 
-## Stdio compatibility
+## Upgrade an existing MCP configuration
 
-For clients that require a subprocess, use the explicit stdio transport:
+1. Close the MCP clients, then use the old executable to run `xserial mcp stop`.
+   Include its `--state-dir` if you used a custom state directory.
+2. Replace the executable and restart serial terminals with the new version.
+3. Replace HTTP client configuration with the stdio configuration above. For
+   an existing stdio configuration, set its arguments to `["mcp"]`, preserving
+   any custom `--state-dir`. Remove xserial's `--transport` and `--url`
+   arguments after `--`; Claude's own `--transport stdio` option before `--`
+   remains valid.
+4. Restart the MCP client and call `serial_status` to discover terminal sessions.
 
-```json
-{
-  "mcpServers": {
-    "xserial": {
-      "command": "/absolute/path/to/xserial",
-      "args": ["mcp", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-This bridge starts or reuses the same daemon and HTTP endpoint. `--url` sets
-the endpoint when a daemon must be started; an existing daemon keeps its URL.
-The automatically started daemon outlives its bridge and inherits the starter's
-stderr. A bridge reusing a daemon subscribes to subsequent audit records and
-prints them on its own stderr. MCP messages exclusively use stdin/stdout.
+The local IPC protocol version is now 3. A new stdio process rejects an old
+HTTP daemon, and the daemon reports incompatible terminal publications with
+`mcp.session_incompatible`. Both daemon and terminal processes must use the
+compatible executable.
 
 ## Tools
 
@@ -201,18 +234,29 @@ another namespace:
 
 ```sh
 xserial /dev/ttyUSB0 --state-dir /path/to/private-state
-xserial mcp --state-dir /path/to/private-state
+```
+
+Set the MCP client's subprocess arguments to:
+
+```json
+["mcp", "--state-dir", "/path/to/private-state"]
+```
+
+Use the same directory when inspecting or stopping that daemon:
+
+```sh
+xserial mcp status --state-dir /path/to/private-state
+xserial mcp stop --state-dir /path/to/private-state
 ```
 
 A kernel-held `daemon.lock` enforces one daemon per state directory;
 `startup.lock` coordinates stdio auto-start. Lock files retain their inode and
-locks are released on process death. `endpoint.json` records the daemon's HTTP
-URL, local IPC address, protocol version and random authentication token.
+locks are released on process death. `endpoint.json` records the daemon's local
+IPC address, protocol version and random authentication token.
 Each terminal publishes its own authenticated loopback IPC endpoint under
 `sessions/`. Directory permissions are 0700 on Unix, with a user/system ACL
 on Windows; Unix directories must belong to the current user. Tokens never
-enter audit logs. HTTP uses the SDK's localhost protection and cross-origin
-protection.
+enter audit logs.
 
 Discovery probes actual authenticated connections. PIDs are informational,
 never a liveness or ownership test. Crash metadata may remain; an unreachable
@@ -224,7 +268,7 @@ entering the UI and does not prevent an ordinary real-port terminal session.
 ## Audit output
 
 Audit records go only to stderr. No audit file or `daemon.log` is created.
-Startup, actual URL, client connections, attach/detach and tool results are
+Startup, shutdown, client connections, attach/detach and tool results are
 recorded using this format:
 
 ```text

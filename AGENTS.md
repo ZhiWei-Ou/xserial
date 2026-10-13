@@ -11,7 +11,7 @@ documentation as authoritative; do not present old notes or assumptions as facts
 
 xserial is a cross-platform serial CLI written in Go for Linux, macOS, and
 Windows. It provides RawUI, a full-screen TUI, a binary workbench, YMODEM,
-recording and replay, and HTTP / stdio MCP access. Use `go.mod` as the source of
+recording and replay, and stdio MCP access. Use `go.mod` as the source of
 truth for Go and dependency versions. The CLI uses Cobra, and terminal interfaces
 use Charm components.
 
@@ -37,7 +37,9 @@ Key directories:
 - Format Go changes with `gofmt`. Keep tests in the corresponding package's
   `*_test.go` files and cover observable behavior and actual regressions.
 - The terminal session owns the serial connection. MCP accesses the existing
-  debug session; do not introduce a competing device receive path.
+  debug session; do not introduce a competing device receive path. `xserial mcp`
+  serves stdio exclusively. The shared daemon uses authenticated local IPC for
+  session discovery and routing; it does not expose an HTTP MCP endpoint.
 - Preserve connection-generation checks, cancellation, and shutdown semantics
   when changing I/O, reconnection, or transfers. Old requests must not write to
   a replacement connection.

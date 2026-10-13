@@ -16,14 +16,13 @@ import (
 	"time"
 )
 
-const protocolVersion = 2
+const protocolVersion = 3
 
 var ErrRunning = errors.New("xserial MCP daemon is already running")
 var ErrIncompatible = errors.New("incompatible xserial MCP daemon; stop it before restarting with this executable")
 
 type Options struct {
 	StateDir string
-	URL      string
 	Stderr   io.Writer
 	Version  string
 }
@@ -34,7 +33,6 @@ type metadata struct {
 	PID      int    `json:"pid"`
 	Demo     bool   `json:"demo,omitempty"` // Reject descriptors from older simulated sessions.
 	Version  string `json:"version"`
-	URL      string `json:"url,omitempty"`
 }
 
 func StateDirectory(path string) (string, error) {
@@ -139,9 +137,6 @@ func Ensure(ctx context.Context, opts Options) (*Client, error) {
 		return nil, err
 	}
 	args := []string{"mcp", "daemon", "--state-dir", dir}
-	if opts.URL != "" {
-		args = append(args, "--url", opts.URL)
-	}
 	cmd := exec.Command(executable, args...)
 	detach(cmd)
 	cmd.Stderr = opts.Stderr
