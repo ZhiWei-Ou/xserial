@@ -3,5 +3,5 @@
 .DS_Store
 /.vscode/
 /.nvim/
-AGENTS.md
+!AGENTS.md
 CONTEXT.md
