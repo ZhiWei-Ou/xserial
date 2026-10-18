@@ -53,7 +53,7 @@ xserial list
 xserial /dev/ttyUSB0
 ```
 
-On macOS, use a port such as `/dev/cu.usbserial-0001`; on Windows, use `COM3`. Press `Ctrl-P h` for help or `Ctrl-P q` to quit.
+On macOS, use a port such as `/dev/cu.usbserial-0001` (`xserial list` hides system ports and the duplicate `/dev/tty.*` nodes; add `--all` to show them); on Windows, use `COM3`. Press `Ctrl-P h` for help or `Ctrl-P q` to quit.
 
 You can also build a source checkout with native Go: `go build ./cmd/xserial`.
 

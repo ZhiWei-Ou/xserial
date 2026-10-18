@@ -26,7 +26,7 @@ const asciiPrefix = `
 `
 
 type rootDependencies struct {
-	list func() ([]serialport.Info, error)
+	list func(all bool) ([]serialport.Info, error)
 	conn func(context.Context, connOptions) error
 }
 

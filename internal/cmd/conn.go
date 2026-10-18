@@ -226,7 +226,7 @@ func runConn(ctx context.Context, opts connOptions) (runErr error) {
 			Parity:     opts.parity,
 			StopBits:   opts.stopBits,
 			ListPorts: func() ([]serialtui.PortOption, error) {
-				ports, err := serialport.List()
+				ports, err := serialport.List(false)
 				if err != nil {
 					return nil, err
 				}

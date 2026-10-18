@@ -53,7 +53,7 @@ xserial list
 xserial /dev/ttyUSB0
 ```
 
-macOS 可使用 `/dev/cu.usbserial-0001`，Windows 使用 `COM3`。按 `Ctrl-P h` 查看帮助，按 `Ctrl-P q` 退出。
+macOS 可使用 `/dev/cu.usbserial-0001`（`xserial list` 默认隐藏系统端口和重复的 `/dev/tty.*` 节点，加 `--all` 可全部显示），Windows 使用 `COM3`。按 `Ctrl-P h` 查看帮助，按 `Ctrl-P q` 退出。
 
 也可以在源码目录通过原生 Go 编译：`go build ./cmd/xserial`。
 

@@ -28,7 +28,9 @@ type Info struct {
 	Product      string
 }
 
-func List() ([]Info, error) {
+// List returns the available serial ports. Unless all is set, it omits
+// platform system ports that are not useful connection targets.
+func List(all bool) ([]Info, error) {
 	ports, err := serial.GetPortsList()
 	if err != nil {
 		return nil, err
@@ -37,6 +39,9 @@ func List() ([]Info, error) {
 	details := detailedPorts()
 	infos := make([]Info, 0, len(ports))
 	for _, port := range ports {
+		if !all && isHiddenPort(port) {
+			continue
+		}
 		if info, ok := details[port]; ok {
 			infos = append(infos, info)
 			continue

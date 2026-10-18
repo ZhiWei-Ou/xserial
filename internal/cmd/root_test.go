@@ -30,7 +30,7 @@ func TestRootWithoutPositionalsShowsHelp(t *testing.T) {
 	listed := false
 	connected := false
 	cmd := newRootCommand(rootDependencies{
-		list: func() ([]serialport.Info, error) {
+		list: func(bool) ([]serialport.Info, error) {
 			listed = true
 			return nil, nil
 		},
@@ -90,7 +90,7 @@ func TestRootShellCompletion(t *testing.T) {
 func TestListCommandListsPorts(t *testing.T) {
 	connected := false
 	cmd := newRootCommand(rootDependencies{
-		list: func() ([]serialport.Info, error) {
+		list: func(bool) ([]serialport.Info, error) {
 			return []serialport.Info{{Name: "/dev/test0"}}, nil
 		},
 		conn: func(context.Context, connOptions) error {
@@ -110,10 +110,38 @@ func TestListCommandListsPorts(t *testing.T) {
 	}
 }
 
+func TestListCommandAllFlag(t *testing.T) {
+	for _, tt := range []struct {
+		args []string
+		want bool
+	}{
+		{args: []string{"list"}, want: false},
+		{args: []string{"list", "--all"}, want: true},
+	} {
+		var gotAll bool
+		cmd := newRootCommand(rootDependencies{
+			list: func(all bool) ([]serialport.Info, error) {
+				gotAll = all
+				return nil, nil
+			},
+			conn: func(context.Context, connOptions) error { return nil },
+		})
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetArgs(tt.args)
+
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("Execute(%v) error = %v", tt.args, err)
+		}
+		if gotAll != tt.want {
+			t.Fatalf("Execute(%v) all = %v, want %v", tt.args, gotAll, tt.want)
+		}
+	}
+}
+
 func TestRootConnectsFromPositionalConfig(t *testing.T) {
 	var got connOptions
 	cmd := newRootCommand(rootDependencies{
-		list: func() ([]serialport.Info, error) { return nil, nil },
+		list: func(bool) ([]serialport.Info, error) { return nil, nil },
 		conn: func(_ context.Context, opts connOptions) error {
 			got = opts
 			return nil
@@ -134,7 +162,7 @@ func TestUnrecognizedCommandWordsAreOrdinaryPortNames(t *testing.T) {
 		t.Run(port, func(t *testing.T) {
 			var got string
 			cmd := newRootCommand(rootDependencies{
-				list: func() ([]serialport.Info, error) { return nil, nil },
+				list: func(bool) ([]serialport.Info, error) { return nil, nil },
 				conn: func(_ context.Context, opts connOptions) error { got = opts.port; return nil },
 			})
 			cmd.SetArgs([]string{port})

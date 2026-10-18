@@ -7,19 +7,26 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newListCommand(list func() ([]serialport.Info, error)) *cobra.Command {
-	return &cobra.Command{
+func newListCommand(list func(all bool) ([]serialport.Info, error)) *cobra.Command {
+	var all bool
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List available serial ports",
-		Args:  cobra.NoArgs,
+		Long: `List available serial ports.
+
+On macOS, system ports (Bluetooth-Incoming-Port, debug-console) and the
+/dev/tty.* call-in duplicates of /dev/cu.* devices are hidden by default.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runList(cmd, list)
+			return runList(cmd, list, all)
 		},
 	}
+	cmd.Flags().BoolVar(&all, "all", false, "show every port, including hidden system ports")
+	return cmd
 }
 
-func runList(cmd *cobra.Command, list func() ([]serialport.Info, error)) error {
-	ports, err := list()
+func runList(cmd *cobra.Command, list func(all bool) ([]serialport.Info, error), all bool) error {
+	ports, err := list(all)
 	if err != nil {
 		return err
 	}
