@@ -27,8 +27,11 @@ type StatusBar struct {
 	dst           io.Writer
 	size          func() (int, int, error)
 	parser        *ansi.Parser
+	started       bool
 	active        bool
+	tmux          bool
 	width, height int
+	lastLine      string
 	cfg           session.ConnectionConfig
 	state         string
 	mode          inputState
@@ -42,7 +45,7 @@ type StatusBar struct {
 }
 
 func NewStatusBar(output, local *os.File, traffic func() (tx, rx uint64)) *StatusBar {
-	b := &StatusBar{dst: local, traffic: traffic, color: localColorsEnabled(), parser: ansi.NewParser()}
+	b := &StatusBar{dst: local, traffic: traffic, color: localColorsEnabled(), parser: ansi.NewParser(), tmux: os.Getenv("TMUX") != ""}
 	b.parser.SetDataSize(1) // Only the parser state is needed, not OSC/DCS payloads.
 	b.Output = &statusWriter{bar: b, file: output}
 	b.Local = &statusWriter{bar: b, file: local}
@@ -65,14 +68,19 @@ func (w *statusWriter) Write(data []byte) (int, error) {
 	b := w.bar
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if !b.started {
+		return w.file.Write(data)
+	}
+	// A resize can reset the scroll region before the refresh timer fires.
+	if err := b.resizeLocked(); err != nil {
+		return 0, err
+	}
 	n, err := w.file.Write(data)
-	if b.active {
-		for _, c := range data[:n] {
-			b.parser.Advance(c)
-		}
-		if err == nil {
-			err = b.drawLocked()
-		}
+	for _, c := range data[:n] {
+		b.parser.Advance(c)
+	}
+	if err == nil {
+		err = b.drawLocked()
 	}
 	return n, err
 }
@@ -83,9 +91,10 @@ func (b *StatusBar) start(cfg session.ConnectionConfig) error {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.started = true
 	b.cfg, b.state = cfg, "Connected"
 	b.sampleTraffic(time.Now())
-	return b.resizeLocked()
+	return b.drawLocked()
 }
 
 // refresh also detects size changes on platforms without SIGWINCH.
@@ -97,14 +106,14 @@ func (b *StatusBar) refresh() (bool, error) {
 	defer b.mu.Unlock()
 	b.sampleTraffic(time.Now())
 	oldWidth, oldHeight := b.width, b.height
-	if err := b.resizeLocked(); err != nil {
+	if err := b.drawLocked(); err != nil {
 		return false, err
 	}
-	return oldWidth != b.width || oldHeight != b.height, b.drawLocked()
+	return oldWidth != b.width || oldHeight != b.height, nil
 }
 
 func (b *StatusBar) resizeLocked() error {
-	if b.parser.State() != parser.GroundState {
+	if b.size == nil || b.parser.State() != parser.GroundState {
 		return nil
 	}
 	width, height, err := b.size()
@@ -117,7 +126,21 @@ func (b *StatusBar) resizeLocked() error {
 	var control strings.Builder
 	control.WriteString("\x1b7")
 	if b.active {
-		fmt.Fprintf(&control, "\x1b[%d;1H\x1b[0m\x1b[2K", min(b.height, height))
+		lastRow, rows := min(b.height, height), 1
+		if b.tmux {
+			switch {
+			case height < b.height:
+				// tmux removes the row below the content cursor when shrinking.
+				rows = 0
+			case height == b.height && width > 0 && width < b.width:
+				// Width reflow splits even unwrapped lines and keeps the footer
+				// at the bottom. Clear its entire old footprint before redrawing.
+				rows += strings.Count(ansi.Hardwrap(b.lastLine, width, true), "\n")
+			}
+		}
+		for row := max(1, lastRow-rows+1); row <= lastRow; row++ {
+			fmt.Fprintf(&control, "\x1b[%d;1H\x1b[0m\x1b[2K", row)
+		}
 	}
 	b.width, b.height = width, height
 	b.active = width >= 12 && height >= 3
@@ -129,10 +152,8 @@ func (b *StatusBar) resizeLocked() error {
 		control.WriteString("\x1bD\x1bM\x1b7")
 		fmt.Fprintf(&control, "\x1b[1;%dr\x1b8", height-1)
 	}
-	if _, err := io.WriteString(b.dst, control.String()); err != nil {
-		return err
-	}
-	return b.drawLocked()
+	_, err = io.WriteString(b.dst, control.String())
+	return err
 }
 
 func (b *StatusBar) close() error {
@@ -141,6 +162,7 @@ func (b *StatusBar) close() error {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.started = false
 	if !b.active {
 		return nil
 	}
@@ -163,11 +185,20 @@ func (b *StatusBar) update(state string, mode inputState) {
 }
 
 func (b *StatusBar) drawLocked() error {
-	if !b.active || b.parser.State() != parser.GroundState {
+	if b.parser.State() != parser.GroundState {
 		return nil
 	}
-	// Save/restore both cursor and attributes; never write into the last column.
-	_, err := fmt.Fprintf(b.dst, "\x1b7\x1b[%d;1H\x1b[0m\x1b[2K%s\x1b8", b.height, b.view(time.Now()))
+	if err := b.resizeLocked(); err != nil {
+		return err
+	}
+	if !b.active {
+		return nil
+	}
+	line := b.view(time.Now())
+	_, err := fmt.Fprintf(b.dst, "\x1b7\x1b[%d;1H\x1b[0m\x1b[2K%s\x1b8", b.height, line)
+	if err == nil {
+		b.lastLine = line
+	}
 	return err
 }
 

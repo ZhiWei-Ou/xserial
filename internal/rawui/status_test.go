@@ -76,7 +76,7 @@ func TestStatusBarDoesNotSplitEscapeOrUTF8(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	b := &StatusBar{dst: file, parser: ansi.NewParser(), active: true, width: 80, height: 24, state: "Connected"}
+	b := &StatusBar{dst: file, parser: ansi.NewParser(), started: true, active: true, width: 80, height: 24, state: "Connected"}
 	w := &statusWriter{bar: b, file: file}
 	for _, pair := range [][2]string{{"\x1b[", "31mred"}, {"\xe5", "\x9b\xba"}, {"\x1b]0;title", "\a"}} {
 		start, _ := file.Seek(0, io.SeekCurrent)

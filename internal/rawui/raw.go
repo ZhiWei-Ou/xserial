@@ -236,7 +236,7 @@ func (f *Frontend) Run(ctx context.Context, endpoint session.Endpoint) (runErr e
 			if err != nil {
 				return fmt.Errorf("refresh status bar: %w", err)
 			}
-			if resized && state == inputYMODEMUploadPath {
+			if state == inputYMODEMUploadPath && (resized || path.width != bar.width) {
 				path.width = bar.width
 				path.render(f.cfg.Local)
 			}
