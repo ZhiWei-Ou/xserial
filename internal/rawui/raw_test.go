@@ -107,7 +107,7 @@ func TestRawFrontendUsesCtrlPAndRestoresTerminal(t *testing.T) {
 	if got != string([]byte{'v', DefaultPrefixKey}) {
 		t.Fatalf("serial output = %v", []byte(got))
 	}
-	if !bytes.Contains(local.Bytes(), []byte("Ctrl-P h")) || !bytes.Contains(local.Bytes(), []byte("Ctrl-P i")) {
+	if !bytes.Contains(local.Bytes(), []byte("<C-p> h")) || !bytes.Contains(local.Bytes(), []byte("<C-p> i")) {
 		t.Fatalf("help = %q", local.String())
 	}
 }

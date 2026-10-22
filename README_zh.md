@@ -53,7 +53,7 @@ xserial list
 xserial /dev/ttyUSB0
 ```
 
-macOS 可使用 `/dev/cu.usbserial-0001`（`xserial list` 默认隐藏系统端口和重复的 `/dev/tty.*` 节点，加 `--all` 可全部显示），Windows 使用 `COM3`。按 `Ctrl-P h` 查看帮助，按 `Ctrl-P q` 退出。
+macOS 可使用 `/dev/cu.usbserial-0001`（`xserial list` 默认隐藏系统端口和重复的 `/dev/tty.*` 节点，加 `--all` 可全部显示），Windows 使用 `COM3`。按 `<C-p> h` 查看帮助，按 `<C-p> q` 退出。
 
 也可以在源码目录通过原生 Go 编译：`go build ./cmd/xserial`。
 
@@ -93,7 +93,7 @@ agent 会启动 stdio 进程，并自动启动或复用本机会话 daemon。如
 
 ### YMODEM 传输
 
-默认终端中，按 `Ctrl-P Ctrl-U` 上传文件，按 `Ctrl-P Ctrl-D` 下载到当前目录。上传提示中，`Tab` 补全文件和目录路径，有多个候选时再按一次列出候选。支持方向键、Home/End、Backspace/Delete 编辑，`Ctrl-U` 清除光标前的内容。支持相对路径、`~/` 和含空格路径（可加引号）。按 Enter 开始，按 Esc 取消。
+默认终端中，按 `<C-p> <C-u>` 上传文件，按 `<C-p> <C-d>` 下载到当前目录。上传提示中，`Tab` 补全文件和目录路径，有多个候选时再按一次列出候选。支持方向键、Home/End、Backspace/Delete 编辑，`<C-u>` 清除光标前的内容。支持相对路径、`~/` 和含空格路径（可加引号）。按 Enter 开始，按 Esc 取消。
 
 ### 常用命令
 

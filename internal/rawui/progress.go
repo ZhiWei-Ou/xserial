@@ -151,7 +151,11 @@ func (p *transferProgress) endLine(w io.Writer) {
 }
 
 func transferSize(n float64) string {
-	for _, unit := range []string{"B", "KiB", "MiB", "GiB"} {
+	if n < 1024 {
+		return fmt.Sprintf("%.0f B", n)
+	}
+	n /= 1024
+	for _, unit := range []string{"KiB", "MiB", "GiB"} {
 		if n < 1024 || unit == "GiB" {
 			return fmt.Sprintf("%.1f %s", n, unit)
 		}

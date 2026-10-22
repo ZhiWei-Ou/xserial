@@ -63,7 +63,7 @@ func TestStatusBarLayoutAndTips(t *testing.T) {
 		if ansi.StringWidth(line) >= width {
 			t.Fatalf("width %d: %q", width, line)
 		}
-		if width >= 60 && (!strings.Contains(line, "Esc: cancel") || !strings.Contains(line, "115200")) {
+		if width >= 60 && (!strings.Contains(line, "Esc cancel") || !strings.Contains(line, "115200")) {
 			t.Fatalf("width %d loses tip/config: %q", width, line)
 		}
 		t.Logf("%d: %s", width, line)
@@ -148,18 +148,47 @@ func TestStatusBarTipsFollowModeAndRemainReadable(t *testing.T) {
 	}
 	b.update("Connected", inputYMODEMUploadPath)
 	selection, _ := b.tip(now)
-	for _, key := range []string{"Tab", "Ctrl-C", "Enter", "Esc"} {
+	for _, key := range []string{"Tab", "<C-c>", "Enter", "Esc"} {
 		if !strings.Contains(selection, key) {
 			t.Fatalf("missing %s in %q", key, selection)
 		}
 	}
 	b.update("", inputYMODEMTransfer)
-	if tip, _ := b.tip(now); tip != "Esc: cancel transfer" {
+	if tip, _ := b.tip(now); tip != "Esc cancel transfer" {
 		t.Fatalf("transfer tip: %q", tip)
 	}
 	b.update("", inputNormal)
-	if tip, _ := b.tip(now); !strings.HasPrefix(tip, "Ctrl-P") {
+	if tip, _ := b.tip(now); tip != "" && !strings.HasPrefix(tip, "<C-p>") {
 		t.Fatalf("normal tip: %q", tip)
+	}
+}
+
+func TestStatusBarTipsSometimesStayQuiet(t *testing.T) {
+	now := time.Now()
+	b := &StatusBar{}
+	last, _ := b.tip(now)
+	if last == "" {
+		t.Fatal("first tip should be visible")
+	}
+	hidden, visible := 0, 0
+	for range 500 {
+		now = now.Add(b.tipDuration)
+		tip, compact := b.tip(now)
+		if tip == "" {
+			hidden++
+			if compact != "" || b.tipDuration < tipHiddenMin || b.tipDuration >= tipHiddenMax {
+				t.Fatalf("quiet period: compact %q, duration %v", compact, b.tipDuration)
+			}
+			continue
+		}
+		visible++
+		if tip == last {
+			t.Fatalf("tip repeated after a visible or quiet period: %q", tip)
+		}
+		last = tip
+	}
+	if hidden == 0 || visible == 0 {
+		t.Fatalf("hidden %d, visible %d", hidden, visible)
 	}
 }
 
@@ -199,13 +228,13 @@ func TestStatusBarTrafficAndWindowRate(t *testing.T) {
 		if ansi.StringWidth(line) >= width {
 			t.Fatalf("width %d overflow: %q", width, line)
 		}
-		if width >= 100 && !strings.Contains(line, "cu.usbserial/115200/8N1 · TX 1.0 KiB | RX 3.0 KiB | RATE 2.0 KiB/s") {
+		if width >= 100 && !strings.Contains(line, "cu.usbserial/115200/8N1 · TX 1.0 KiB · RX 3.0 KiB · 2.0 KiB/s") {
 			t.Fatalf("missing device/runtime groups: %q", line)
 		}
 		if width <= 60 && strings.Contains(line, "TX ") {
 			t.Fatalf("runtime should be hidden on narrow terminal: %q", line)
 		}
-		if strings.Contains(line, "TX ") != strings.Contains(line, "RATE 2.0 KiB/s") {
+		if strings.Contains(line, "TX ") != strings.Contains(line, "2.0 KiB/s") {
 			t.Fatalf("runtime must be shown as a whole: %q", line)
 		}
 		t.Logf("%d: %s", width, line)
@@ -251,12 +280,12 @@ func TestStatusBarConnectionMarkerKeepsTips(t *testing.T) {
 	for _, state := range []struct{ name, text string }{{"Connected", "up"}, {"Reconnecting", "retry"}, {"Disconnected", "down"}} {
 		b := &StatusBar{width: 120, state: state.name, cfg: session.ConnectionConfig{PortName: "/dev/cu.usbserial", BaudRate: 115200, DataBits: 8, Parity: "none", StopBits: "1"}}
 		line := b.view(time.Now())
-		if !strings.HasPrefix(line, "* ["+state.text+"] cu.usbserial/") || !strings.Contains(line, "Tip: ") {
+		if !strings.HasPrefix(line, "* ["+state.text+"] cu.usbserial/") || !strings.Contains(line, "<C-p> ") {
 			t.Fatalf("%s: %q", state.name, line)
 		}
 		b.color = true
 		line = ansi.Strip(b.view(time.Now()))
-		if !strings.HasPrefix(line, "* cu.usbserial/") || !strings.Contains(line, "Tip: ") {
+		if !strings.HasPrefix(line, "* cu.usbserial/") || !strings.Contains(line, "<C-p> ") {
 			t.Fatalf("colored %s: %q", state.name, line)
 		}
 	}

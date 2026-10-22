@@ -114,8 +114,8 @@ type localCommand struct {
 var localCommands = []localCommand{
 	{keys: "iI", label: "i", description: "show connection configuration", action: actionInfo},
 	{keys: "hH?", label: "h", description: "show this help", action: actionHelp},
-	{keys: "\x15", label: "Ctrl-U", description: "upload file with YMODEM", action: actionYMODEMUpload},
-	{keys: "\x04", label: "Ctrl-D", description: "download file with YMODEM", action: actionYMODEMDownload},
+	{keys: "\x15", label: "<C-u>", description: "upload file with YMODEM", action: actionYMODEMUpload},
+	{keys: "\x04", label: "<C-d>", description: "download file with YMODEM", action: actionYMODEMDownload},
 	{keys: "qQ", label: "q", description: "quit", action: actionQuit},
 }
 
@@ -419,11 +419,11 @@ func printHelp(w io.Writer) {
 	printLocalLine(w, "")
 	printLocalLine(w, "Commands:")
 	for _, command := range localCommands {
-		printLocalLine(w, fmt.Sprintf("  Ctrl-P %-7s %s", command.label, command.description))
+		printLocalLine(w, fmt.Sprintf("  <C-p> %-8s %s", command.label, command.description))
 	}
-	printLocalLine(w, "  Ctrl-P Ctrl-P  send Ctrl-P")
+	printLocalLine(w, "  <C-p> <C-p>    send <C-p>")
 	printLocalLine(w, "  Esc            cancel file selection or transfer")
-	printLocalLine(w, "  Ctrl-C         clear the entire upload path during file selection")
+	printLocalLine(w, "  <C-c>          clear the entire upload path during file selection")
 	printLocalLine(w, "  Tab            complete upload path (press again to list matches)")
 }
 

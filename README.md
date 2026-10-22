@@ -53,7 +53,7 @@ xserial list
 xserial /dev/ttyUSB0
 ```
 
-On macOS, use a port such as `/dev/cu.usbserial-0001` (`xserial list` hides system ports and the duplicate `/dev/tty.*` nodes; add `--all` to show them); on Windows, use `COM3`. Press `Ctrl-P h` for help or `Ctrl-P q` to quit.
+On macOS, use a port such as `/dev/cu.usbserial-0001` (`xserial list` hides system ports and the duplicate `/dev/tty.*` nodes; add `--all` to show them); on Windows, use `COM3`. Press `<C-p> h` for help or `<C-p> q` to quit.
 
 You can also build a source checkout with native Go: `go build ./cmd/xserial`.
 
@@ -95,7 +95,7 @@ See the [MCP guide](docs/mcp.md) for setup.
 
 ### YMODEM transfers
 
-In the default terminal, press `Ctrl-P Ctrl-U` to upload a file or `Ctrl-P Ctrl-D` to download into the current directory. In the upload prompt, `Tab` completes file and directory paths; press it again to list ambiguous matches. Use arrow keys, Home/End, and Backspace/Delete to edit, or `Ctrl-U` to clear the text before the cursor. Relative paths, `~/`, and paths containing spaces (optionally quoted) are supported. Press Enter to start or Esc to cancel.
+In the default terminal, press `<C-p> <C-u>` to upload a file or `<C-p> <C-d>` to download into the current directory. In the upload prompt, `Tab` completes file and directory paths; press it again to list ambiguous matches. Use arrow keys, Home/End, and Backspace/Delete to edit, or `<C-u>` to clear the text before the cursor. Relative paths, `~/`, and paths containing spaces (optionally quoted) are supported. Press Enter to start or Esc to cancel.
 
 ### More commands
 

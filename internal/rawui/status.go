@@ -1,6 +1,7 @@
 package rawui
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -37,6 +38,8 @@ type StatusBar struct {
 	mode          inputState
 	tipIndex      int
 	tipChanged    time.Time
+	tipHidden     bool
+	tipDuration   time.Duration
 	color         bool
 	traffic       func() (tx, rx uint64)
 	samples       []trafficSample
@@ -229,7 +232,6 @@ func (b *StatusBar) view(now time.Time) string {
 	}
 	indicatorWidth := ansi.StringWidth(indicator)
 	right, compact := b.tip(now)
-	right, compact = "Tip: "+right, "Tip: "+compact
 	available := width
 	if right != "" {
 		available -= ansi.StringWidth(right) + 3
@@ -242,15 +244,16 @@ func (b *StatusBar) view(now time.Time) string {
 			available = width
 		}
 	}
+	runtime := ""
 	if b.traffic != nil {
-		runtime := fmt.Sprintf(" · TX %s | RX %s | RATE %s/s",
+		runtime = fmt.Sprintf(" · TX %s · RX %s · %s/s",
 			transferSize(float64(b.tx)), transferSize(float64(b.rx)), transferSize(b.rate))
-		if indicatorWidth+ansi.StringWidth(port+settings+runtime) <= available {
-			settings += runtime
+		if indicatorWidth+ansi.StringWidth(port+settings+runtime) > available {
+			runtime = ""
 		}
 	}
-	port = ansi.Truncate(port, max(1, available-indicatorWidth-ansi.StringWidth(settings)), "…")
-	left := ansi.Truncate(indicator+port+settings, available, "…")
+	port = ansi.Truncate(port, max(1, available-indicatorWidth-ansi.StringWidth(settings+runtime)), "…")
+	left := ansi.Truncate(indicator+port+settings+runtime, available, "…")
 	gap := ""
 	if right != "" {
 		gap = strings.Repeat(" ", max(3, width-ansi.StringWidth(left)-ansi.StringWidth(right)))
@@ -258,37 +261,58 @@ func (b *StatusBar) view(now time.Time) string {
 	if !b.color {
 		return left + gap + right
 	}
-	label := lipgloss.NewStyle().Foreground(lipgloss.Color("#93C5FD"))
+	// The port name leads; serial settings and traffic recede toward the tip.
 	indicator = lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor)).Render("*") + " "
-	left = ansi.Truncate(indicator+label.Render(port+settings), available, "…")
-	rightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
-	return left + gap + rightStyle.Render(right)
+	port = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB")).Bold(true).Render(port)
+	settings = lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8")).Render(settings)
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("#808080"))
+	if runtime != "" {
+		runtime = muted.Render(runtime)
+	}
+	left = ansi.Truncate(indicator+port+settings+runtime, available, "…")
+	return left + gap + muted.Render(right)
 }
 
 var normalTips = []string{
-	"Ctrl-P h: help",
-	"Ctrl-P i: port info",
-	"Ctrl-P Ctrl-U: upload file",
-	"Ctrl-P Ctrl-D: receive file",
-	"Ctrl-P q: quit",
+	"<C-p> h help",
+	"<C-p> i port info",
+	"<C-p> <C-u> upload file",
+	"<C-p> <C-d> receive file",
+	"<C-p> q quit",
 }
+
+const (
+	tipVisibleDuration = 8 * time.Second
+	tipHiddenChance    = 0.4
+	tipHiddenMin       = 5 * time.Second
+	tipHiddenMax       = 20 * time.Second
+)
 
 // Tips change slowly and never repeat immediately, regardless of output rate.
 func (b *StatusBar) tip(now time.Time) (string, string) {
 	switch b.mode {
 	case inputYMODEMUploadPath:
-		return "Tab: complete · Ctrl-C: clear · Enter: send · Esc: cancel", "Tab · Ctrl-C clear · Enter send · Esc cancel"
+		return "Tab complete · <C-c> clear · Enter send · Esc cancel", "Tab · <C-c> clear · Enter send · Esc cancel"
 	case inputYMODEMTransfer:
-		return "Esc: cancel transfer", "Esc: cancel"
+		return "Esc cancel transfer", "Esc cancel"
 	case inputCancellingTransfer:
 		return "Canceling transfer…", "Canceling…"
 	}
 	if b.tipChanged.IsZero() {
 		b.tipIndex = rand.IntN(len(normalTips))
-		b.tipChanged = now
-	} else if now.Sub(b.tipChanged) >= 8*time.Second {
-		b.tipIndex = (b.tipIndex + 1 + rand.IntN(len(normalTips)-1)) % len(normalTips)
-		b.tipChanged = now
+		b.tipChanged, b.tipDuration = now, tipVisibleDuration
+	} else if now.Sub(b.tipChanged) >= cmp.Or(b.tipDuration, tipVisibleDuration) {
+		// Some periods stay quiet for a random while so tips feel occasional.
+		b.tipChanged, b.tipHidden = now, rand.Float64() < tipHiddenChance
+		if b.tipHidden {
+			b.tipDuration = tipHiddenMin + rand.N(tipHiddenMax-tipHiddenMin)
+		} else {
+			b.tipDuration = tipVisibleDuration
+			b.tipIndex = (b.tipIndex + 1 + rand.IntN(len(normalTips)-1)) % len(normalTips)
+		}
+	}
+	if b.tipHidden {
+		return "", ""
 	}
 	return normalTips[b.tipIndex], normalTips[b.tipIndex]
 }
