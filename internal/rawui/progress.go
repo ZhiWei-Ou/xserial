@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/progress"
 	"charm.land/lipgloss/v2"
 	session "github.com/ZhiWei-Ou/xserial/internal/middleware"
 	"github.com/charmbracelet/x/ansi"
@@ -34,90 +35,178 @@ func (p *transferProgress) render(w io.Writer, event session.YMODEMProgress) {
 	if columns, _, err := term.GetSize(int(os.Stderr.Fd())); err == nil && columns > 0 {
 		width = columns
 	}
-	line := p.view(event, now, width-1)
-	if !localColorsEnabled() {
-		line = ansi.Strip(line)
-	}
-	fmt.Fprintf(w, "\r\x1b[2K%s", line)
+	fmt.Fprintf(w, "\r\x1b[2K%s", p.view(event, now, width-1, localColorsEnabled()))
 	p.open = true
 }
 
-// view reserves space for the percentage separately from the bar and drops
-// optional fields before shortening the bar below a useful width.
-func (p *transferProgress) view(event session.YMODEMProgress, now time.Time, width int) string {
+const (
+	progressBarMax = 32
+	progressBarMin = 10
+	// Reserved widths keep the bar length steady while speed and ETA text
+	// change length between redraws.
+	progressSpeedWidth = len("1023.9 KiB/s")
+	progressETAWidth   = len("99h59m left")
+	progressNameMax    = 24
+)
+
+// view lays out "Sending name  ████▌░░░  64%  328 / 512 KiB · 10.2 KiB/s · 18s left".
+// Optional fields are dropped (speed, ETA, name, amount) before the bar
+// shrinks below a useful width; the layout depends only on the total and
+// the terminal width, so the bar does not jitter between redraws.
+func (p *transferProgress) view(event session.YMODEMProgress, now time.Time, width int, color bool) string {
+	width = max(1, width)
 	action := "Sending"
 	if event.Direction == "download" {
 		action = "Receiving"
 	}
-	amount := transferSize(float64(event.Written))
-	if event.Total > 0 {
-		scale, unit := float64(1), "B"
-		for _, candidate := range []string{"KiB", "MiB", "GiB"} {
-			if float64(event.Total)/scale < 1024 {
-				break
-			}
-			scale *= 1024
-			unit = candidate
-		}
-		precision := 0
-		if scale > 1 && float64(event.Total)/scale < 100 {
-			precision = 1
-		}
-		total := fmt.Sprintf("%.*f", precision, float64(event.Total)/scale)
-		amount = fmt.Sprintf("%*.*f / %s %s", len(total), precision, float64(event.Written)/scale, total, unit)
+	name := ""
+	if event.Path != "" {
+		name = ansi.Truncate(filepath.Base(event.Path), progressNameMax, "…")
 	}
-	speedText, eta := "         —/s", "ETA     —"
+
+	amount, amountWidth := transferSize(float64(event.Written)), 0
+	if event.Total > 0 {
+		amount, amountWidth = transferAmount(event.Written, event.Total)
+	}
+	speed, eta := "", ""
 	if elapsed := now.Sub(p.started).Seconds(); elapsed >= 0.5 && event.Written > 0 {
-		speed := float64(event.Written) / elapsed
-		speedText = fmt.Sprintf("%12s", transferSize(speed)+"/s")
+		rate := float64(event.Written) / elapsed
+		speed = transferSize(rate) + "/s"
 		if event.Total > event.Written {
-			remaining := time.Duration(float64(event.Total-event.Written) / speed * float64(time.Second))
-			eta = fmt.Sprintf("ETA %5s", remaining.Round(time.Second).String())
+			remaining := time.Duration(float64(event.Total-event.Written) / rate * float64(time.Second))
+			eta = transferETA(remaining) + " left"
 		}
 	}
 	if event.Total > 0 && event.Written >= event.Total {
-		eta = "Finishing"
+		eta = "finishing…"
 	}
-	percent := float64(0)
-	percentText := ""
-	if event.Total > 0 {
-		percent = min(1, max(0, float64(event.Written)/float64(event.Total)))
-		percentText = fmt.Sprintf("%3.0f%%", percent*100)
+
+	type field struct {
+		text    string
+		reserve int
 	}
-	details := amount + "  " + speedText + "  " + eta
-	barWidth := func() int {
-		return min(28, width-ansi.StringWidth(action+percentText+details)-6)
-	}
-	if barWidth() < 12 {
-		details = amount + "  " + speedText
-	}
-	if barWidth() < 12 {
-		details = speedText
-	}
+	// Field order is display order; drop order is speed, ETA, name, amount.
+	amountField, speedField, etaField := &field{amount, amountWidth}, &field{speed, progressSpeedWidth}, &field{eta, progressETAWidth}
 	if event.Total <= 0 {
-		details = amount + "  " + speedText
-		if ansi.StringWidth(action+details)+2 > width {
-			details = amount
-		}
-	} else if ansi.StringWidth(action+percentText+details)+4 > width {
-		details = ""
+		etaField.reserve = 0
 	}
-	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
-	line := lipgloss.NewStyle().Foreground(lipgloss.Color(localInfoColor)).Render(action) + "  "
+	details := []*field{amountField, speedField, etaField}
+	showName := name != ""
+	fixedWidth := func() int {
+		n := len(action)
+		if showName {
+			n += 1 + ansi.StringWidth(name)
+		}
+		if event.Total > 0 {
+			n += 2 + 1 + 4 // gaps around the bar, then the percentage
+		}
+		gap := 2
+		for _, d := range details {
+			if w := max(d.reserve, ansi.StringWidth(d.text)); w > 0 {
+				n += gap + w
+				gap = 3
+			}
+		}
+		return n
+	}
+	fits := func() bool {
+		if event.Total > 0 {
+			return width-fixedWidth() >= progressBarMin
+		}
+		return fixedWidth() <= width
+	}
+	for _, drop := range []func(){
+		func() { *speedField = field{} },
+		func() { *etaField = field{} },
+		func() { showName = false },
+		func() { *amountField = field{} },
+	} {
+		if fits() {
+			break
+		}
+		drop()
+	}
+
+	style := func(text, c string) string {
+		if !color || text == "" {
+			return text
+		}
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render(text)
+	}
+	line := style(action, localInfoColor)
+	if showName {
+		line += " " + style(name, "#E5E7EB")
+	}
 	if event.Total > 0 {
-		if barWidth() >= 12 {
-			bar := progress.New(progress.WithColors(lipgloss.Color("#60A5FA")),
-				progress.WithFillCharacters('━', '─'), progress.WithoutPercentage(), progress.WithWidth(barWidth()))
-			bar.EmptyColor = lipgloss.Color("#555555")
-			line += bar.ViewAs(percent) + "  "
+		percent := min(1, max(0, float64(event.Written)/float64(event.Total)))
+		if barWidth := min(progressBarMax, width-fixedWidth()); barWidth >= progressBarMin {
+			fill := "#60A5FA"
+			if percent >= 1 {
+				fill = localSuccessColor
+			}
+			line += "  " + progressBar(percent, barWidth, color, fill)
 		}
-		line += percentText
-		if details != "" {
-			line += "  "
+		line += fmt.Sprintf(" %3.0f%%", percent*100)
+	}
+	parts := make([]string, 0, len(details))
+	for _, d := range details {
+		if d.text != "" {
+			parts = append(parts, d.text)
 		}
 	}
-	line += muted.Render(details)
-	return ansi.Truncate(line, max(1, width), "…")
+	if len(parts) > 0 {
+		line += "  " + style(strings.Join(parts, " · "), "#808080")
+	}
+	return ansi.Truncate(line, width, "…")
+}
+
+// progressBar draws a solid bar with half-cell resolution. With color the
+// empty track is a dim solid block, so the bar reads as one thick strip;
+// without color the track uses a light shade.
+func progressBar(percent float64, width int, color bool, fill string) string {
+	halves := int(percent*float64(width*2) + 0.5)
+	full, half := halves/2, halves%2
+	empty := width - full - half
+	if !color {
+		return strings.Repeat("█", full) + strings.Repeat("▌", half) + strings.Repeat("░", empty)
+	}
+	const track = "#3F3F46"
+	bar := lipgloss.NewStyle().Foreground(lipgloss.Color(fill)).Render(strings.Repeat("█", full))
+	if half == 1 {
+		// The right half of ▌ shows the background, so paint it as track.
+		bar += lipgloss.NewStyle().Foreground(lipgloss.Color(fill)).Background(lipgloss.Color(track)).Render("▌")
+	}
+	return bar + lipgloss.NewStyle().Foreground(lipgloss.Color(track)).Render(strings.Repeat("█", empty))
+}
+
+// transferETA keeps the estimate to two units: "18s", "8m50s", "1h25m".
+func transferETA(d time.Duration) string {
+	d = d.Round(time.Second)
+	if d >= time.Hour {
+		d = d.Round(time.Minute)
+		return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+	return d.String()
+}
+
+// transferAmount formats "written / total unit" in the total's unit, padding
+// written to the total's width; it also returns that fixed width.
+func transferAmount(written, total int64) (string, int) {
+	scale, unit := float64(1), "B"
+	for _, candidate := range []string{"KiB", "MiB", "GiB"} {
+		if float64(total)/scale < 1024 {
+			break
+		}
+		scale *= 1024
+		unit = candidate
+	}
+	precision := 0
+	if scale > 1 && float64(total)/scale < 100 {
+		precision = 1
+	}
+	totalText := fmt.Sprintf("%.*f", precision, float64(total)/scale)
+	text := fmt.Sprintf("%*.*f / %s %s", len(totalText), precision, float64(written)/scale, totalText, unit)
+	return text, ansi.StringWidth(text)
 }
 
 func (p *transferProgress) finish(w io.Writer, event session.YMODEMFinished) {
