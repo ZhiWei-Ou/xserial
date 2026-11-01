@@ -304,6 +304,7 @@ func receiveYMODEMPacket(ctx context.Context, conn io.Reader) (ymodemPacket, err
 	case ymodemSTX:
 		size = ymodemLongBlock
 	default:
+		unreadYMODEMByte(conn)
 		return ymodemPacket{}, fmt.Errorf("%w: unexpected packet marker 0x%02x", ErrYMODEMProtocol, marker)
 	}
 	packet := make([]byte, size+4)
@@ -354,9 +355,18 @@ func waitYMODEMByte(ctx context.Context, conn io.Reader, want byte) error {
 		return ErrYMODEMRemoteCanceled
 	}
 	if got != want {
+		unreadYMODEMByte(conn)
 		return fmt.Errorf("%w: got 0x%02x, want 0x%02x", ErrYMODEMProtocol, got, want)
 	}
 	return nil
+}
+
+// unreadYMODEMByte returns an unexpected byte to a stream that supports it, so
+// the caller can still show it; it is often the start of a device message.
+func unreadYMODEMByte(src io.Reader) {
+	if u, ok := src.(interface{ UnreadByte() error }); ok {
+		_ = u.UnreadByte()
+	}
 }
 
 func readYMODEMByte(ctx context.Context, src io.Reader) (byte, error) {

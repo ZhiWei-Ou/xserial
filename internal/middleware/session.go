@@ -154,8 +154,11 @@ type endpoint struct {
 	transferCancel context.CancelFunc
 	transferInput  chan []byte
 	transferDone   <-chan struct{}
-	workers        sync.WaitGroup
-	recorder       *capture.Writer
+	// deliverMu orders received data around the end of a transfer, so bytes
+	// the transfer did not consume reach the frontend before newer ones.
+	deliverMu sync.Mutex
+	workers   sync.WaitGroup
+	recorder  *capture.Writer
 }
 
 func (e *endpoint) Events() <-chan Event {
@@ -270,18 +273,18 @@ func (e *endpoint) writeFromGeneration(ctx context.Context, source string, data 
 }
 
 func (e *endpoint) StartYMODEMUpload(ctx context.Context, path string) error {
-	return e.startTransfer(ctx, func(transferCtx context.Context, stream io.ReadWriter) {
+	return e.startTransfer(ctx, func(transferCtx context.Context, stream *transferStream) {
 		e.runYMODEMUpload(transferCtx, path, stream)
 	})
 }
 
 func (e *endpoint) StartYMODEMDownload(ctx context.Context, dir string) error {
-	return e.startTransfer(ctx, func(transferCtx context.Context, stream io.ReadWriter) {
+	return e.startTransfer(ctx, func(transferCtx context.Context, stream *transferStream) {
 		e.runYMODEMDownload(transferCtx, dir, stream)
 	})
 }
 
-func (e *endpoint) startTransfer(ctx context.Context, run func(context.Context, io.ReadWriter)) error {
+func (e *endpoint) startTransfer(ctx context.Context, run func(context.Context, *transferStream)) error {
 	if err := e.acquireSend(ctx); err != nil {
 		return err
 	}
@@ -317,24 +320,22 @@ func (e *endpoint) startTransfer(ctx context.Context, run func(context.Context, 
 	return nil
 }
 
-func (e *endpoint) runYMODEMUpload(ctx context.Context, path string, stream io.ReadWriter) {
+func (e *endpoint) runYMODEMUpload(ctx context.Context, path string, stream *transferStream) {
 	stats, err := transfer.SendYMODEMFile(ctx, path, stream, func(written, total int64) {
 		e.emit(YMODEMProgress{Direction: "upload", Path: path, Written: written, Total: total})
 	}, func(retry transfer.YMODEMRetry) {
 		e.reportYMODEMRetry(ctx, "upload", path, retry)
 	})
-	e.finishTransfer()
-	e.emit(newYMODEMFinished("upload", path, stats, err))
+	e.finishTransfer(stream, newYMODEMFinished("upload", path, stats, err))
 }
 
-func (e *endpoint) runYMODEMDownload(ctx context.Context, dir string, stream io.ReadWriter) {
+func (e *endpoint) runYMODEMDownload(ctx context.Context, dir string, stream *transferStream) {
 	path, stats, err := transfer.ReceiveYMODEMFile(ctx, dir, stream, func(written, total int64) {
 		e.emit(YMODEMProgress{Direction: "download", Written: written, Total: total})
 	}, func(retry transfer.YMODEMRetry) {
 		e.reportYMODEMRetry(ctx, "download", retry.Path, retry)
 	})
-	e.finishTransfer()
-	e.emit(newYMODEMFinished("download", path, stats, err))
+	e.finishTransfer(stream, newYMODEMFinished("download", path, stats, err))
 }
 
 func newYMODEMFinished(direction, path string, stats transfer.YMODEMStats, err error) YMODEMFinished {
@@ -372,21 +373,45 @@ func (e *endpoint) waitForAcknowledgement(ctx context.Context, acknowledged <-ch
 	}
 }
 
-func (e *endpoint) finishTransfer() {
+// finishTransfer ends the active transfer, emits @finished, and then hands the
+// received bytes the transfer left unread, such as a device error message, to
+// the frontend as normal output.
+func (e *endpoint) finishTransfer(stream *transferStream, finished Event) {
 	e.mu.Lock()
 	e.transferCancel()
+	e.mu.Unlock()
+	// The cancel above releases a dispatcher blocked on the transfer input.
+	e.deliverMu.Lock()
+	defer e.deliverMu.Unlock()
+	e.mu.Lock()
 	e.transferActive = false
 	e.transferCancel = nil
 	e.transferInput = nil
 	e.transferDone = nil
 	e.mu.Unlock()
+
+	e.emit(finished)
+	leftover := stream.pending
+	for drained := false; !drained; {
+		select {
+		case chunk := <-stream.input:
+			leftover = append(leftover, chunk...)
+		default:
+			drained = true
+		}
+	}
+	if len(leftover) > 0 {
+		e.emit(Received{Data: append([]byte(nil), leftover...), At: time.Now()})
+	}
 }
 
 type transferStream struct {
-	ctx      context.Context
-	endpoint *endpoint
-	input    <-chan []byte
-	pending  []byte
+	ctx       context.Context
+	endpoint  *endpoint
+	input     <-chan []byte
+	pending   []byte
+	last      byte
+	canUnread bool
 }
 
 func (s *transferStream) Read(data []byte) (int, error) {
@@ -402,7 +427,20 @@ func (s *transferStream) Read(data []byte) (int, error) {
 	}
 	n := copy(data, s.pending)
 	s.pending = s.pending[n:]
+	if n > 0 {
+		s.last, s.canUnread = data[n-1], true
+	}
 	return n, nil
+}
+
+// UnreadByte puts the last byte read back in front of the pending input.
+func (s *transferStream) UnreadByte() error {
+	if !s.canUnread {
+		return errors.New("transfer stream: no byte to unread")
+	}
+	s.pending = append([]byte{s.last}, s.pending...)
+	s.canUnread = false
+	return nil
 }
 
 func (s *transferStream) Write(data []byte) (int, error) {
@@ -607,6 +645,8 @@ func (s *Session) runBackendEvents(ctx context.Context, e *endpoint) error {
 }
 
 func (e *endpoint) deliverReceived(ctx context.Context, data []byte, at time.Time) bool {
+	e.deliverMu.Lock()
+	defer e.deliverMu.Unlock()
 	e.mu.Lock()
 	input, done := e.transferInput, e.transferDone
 	e.mu.Unlock()
@@ -615,7 +655,7 @@ func (e *endpoint) deliverReceived(ctx context.Context, data []byte, at time.Tim
 		case input <- append([]byte(nil), data...):
 			return true
 		case <-done:
-			return true
+			// The transfer ended before taking this chunk; show it instead.
 		case <-ctx.Done():
 			return false
 		}

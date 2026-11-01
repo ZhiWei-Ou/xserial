@@ -393,6 +393,69 @@ func TestSessionRunsYMODEMUploadThroughSharedSerialReaderAndWriter(t *testing.T)
 	}
 }
 
+func TestYMODEMDownloadShowsDeviceTextThatEndedTheTransfer(t *testing.T) {
+	sessionConn, devicePort := net.Pipe()
+	defer devicePort.Close()
+	deviceText := "sb: failed, 0 files: timeout\r\n"
+	prompt := "esp32c6:/$ "
+	deviceErr := make(chan error, 1)
+	go func() {
+		request := make([]byte, 1)
+		if _, err := io.ReadFull(devicePort, request); err != nil {
+			deviceErr <- err
+			return
+		}
+		if request[0] != 'C' {
+			deviceErr <- fmt.Errorf("receiver request = %q", request)
+			return
+		}
+		if err := transfer.WriteFull(devicePort, []byte(deviceText)); err != nil {
+			deviceErr <- err
+			return
+		}
+		deviceErr <- transfer.WriteFull(devicePort, []byte(prompt))
+	}()
+
+	var finished YMODEMFinished
+	var shown []byte
+	frontend := frontendFunc(func(ctx context.Context, endpoint Endpoint) error {
+		if err := endpoint.StartYMODEMDownload(ctx, t.TempDir()); err != nil {
+			return err
+		}
+		for event := range endpoint.Events() {
+			switch event := event.(type) {
+			case YMODEMFinished:
+				finished = event
+			case Received:
+				if finished.Direction == "" {
+					return fmt.Errorf("output %q shown before the transfer finished", event.Data)
+				}
+				shown = append(shown, event.Data...)
+				if len(shown) >= len(deviceText+prompt) {
+					endpoint.Quit()
+					return nil
+				}
+			}
+		}
+		return nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := New(Config{Port: ymodemTestPort{Conn: sessionConn}, Frontend: frontend}).Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if err := <-deviceErr; err != nil {
+		t.Fatalf("device error = %v", err)
+	}
+	if !errors.Is(finished.Err, transfer.ErrYMODEMProtocol) {
+		t.Fatalf("download finished = %#v", finished)
+	}
+	if string(shown) != deviceText+prompt {
+		t.Fatalf("shown output = %q, want %q", shown, deviceText+prompt)
+	}
+}
+
 type ymodemTestPort struct {
 	net.Conn
 }
